@@ -1,6 +1,6 @@
 # Dual HTTP Egress Gateway Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use beads-superpowers:subagent-driven-development (recommended) or beads-superpowers:executing-plans to implement this plan task-by-task. Each Task becomes a bead (`bd create -t task --parent <epic-id>`). Steps within tasks use checkbox (`- [ ]`) syntax for human readability.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use beads-superpowers:subagent-driven-development (recommended) or beads-superpowers:executing-plans to implement this plan task-by-task. Each Task becomes a bead (`bd create -t task --parent <epic-id>`). Steps within tasks use checkbox (`- [x]`) syntax for human readability.
 
 **Goal:** Build one Ubuntu-ready Go daemon with two authenticated HTTP proxy listeners that independently round-robin over a shared, subscription-fed, health-checked sing-box outbound pool and retry the remaining nodes within the same connection attempt.
 
@@ -47,7 +47,7 @@
 - Real secrets never appear through formatting.
 - Examples contain no real credentials or URLs and bind proxy listeners to loopback.
 
-- [ ] **Step 1: Write failing configuration tests**
+- [x] **Step 1: Write failing configuration tests**
 
 ```go
 func TestLoadRejectsMissingSecrets(t *testing.T) { /* load valid YAML with empty env and require an error */ }
@@ -56,23 +56,23 @@ func TestLoadRejectsNonLoopbackAdmin(t *testing.T) { /* set 0.0.0.0:19090 and re
 func TestSecretFormattingIsRedacted(t *testing.T) { /* assert fmt.Sprint and fmt.Sprintf("%#v") contain no secret */ }
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `go test ./internal/config -v`
 
 Expected: compilation failure because `Load`, `Config`, and `Secret` do not exist.
 
-- [ ] **Step 3: Implement the minimum validated config loader and safe examples**
+- [x] **Step 3: Implement the minimum validated config loader and safe examples**
 
 Implement exact defaults: loopback proxy ports `127.0.0.1:18080` and `127.0.0.1:18081`, admin `127.0.0.1:19090`, refresh `30m`, probe `30s`, dial timeout `10s`, shutdown drain `30s`, maximum subscription body `4 MiB`. Read `PROXY_USERNAME`, `PROXY_PASSWORD`, `SUBSCRIPTION_URLS`, and `ADMIN_TOKEN` from environment only.
 
-- [ ] **Step 4: Run GREEN and static checks**
+- [x] **Step 4: Run GREEN and static checks**
 
 Run: `go test ./internal/config -v && gofmt -w cmd/dual-egress-gateway/main.go internal/config/*.go && go vet ./...`
 
 Expected: all config tests pass and vet exits 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add .gitignore go.mod cmd internal/config config.example.yaml .env.example LICENSE NOTICE
@@ -108,7 +108,7 @@ git commit -m "feat: add secure gateway configuration"
 - A successful empty response is rejected and cannot erase a source.
 - Response bodies beyond 4 MiB fail before allocation grows unbounded.
 
-- [ ] **Step 1: Write parser, redaction, and source-isolation tests**
+- [x] **Step 1: Write parser, redaction, and source-isolation tests**
 
 ```go
 func TestParseSingBoxJSON(t *testing.T) { /* assert protocol types and stable IDs */ }
@@ -120,23 +120,23 @@ func TestRedactionRemovesSecretsAndEndpoints(t *testing.T) { /* assert raw value
 func FuzzParse(f *testing.F) { /* seed all three fixture formats and assert no panic */ }
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `go test ./internal/subscription ./internal/redact -v`
 
 Expected: compilation failure for missing parser, manager, and redactor.
 
-- [ ] **Step 3: Implement parsers and per-source transactional manager**
+- [x] **Step 3: Implement parsers and per-source transactional manager**
 
 Prefer sing-box JSON requested with `User-Agent: sing-box`; retry format negotiation with `clash.meta` only when the response is not recognized. Port the minimum MIT-licensed conversion logic needed from Easy Proxies and record exact upstream file/commit in `NOTICE`.
 
-- [ ] **Step 4: Run GREEN, fuzz seeds, and formatting**
+- [x] **Step 4: Run GREEN, fuzz seeds, and formatting**
 
 Run: `go test ./internal/subscription ./internal/redact -v && go test ./internal/subscription -run=Fuzz -fuzz=FuzzParse -fuzztime=10s && gofmt -w internal/subscription/*.go internal/redact/*.go`
 
 Expected: all deterministic tests pass; the bounded fuzz run reports no panic.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/subscription internal/redact testdata NOTICE
@@ -166,7 +166,7 @@ git commit -m "feat: add resilient subscription snapshots"
 - Removed nodes remain leased for active connections and close after the final lease.
 - When all nodes are unhealthy, one half-open attempt per node is allowed without a retry storm.
 
-- [ ] **Step 1: Write failing state-machine tests**
+- [x] **Step 1: Write failing state-machine tests**
 
 ```go
 func TestSelectorsHaveIndependentCursors(t *testing.T) { /* HTTP A,B while WS independently A,B */ }
@@ -176,23 +176,23 @@ func TestRemovedNodeDrainsUntilLeaseClose(t *testing.T) { /* runtime closes only
 func TestAllDownHalfOpenIsBounded(t *testing.T) { /* at most one concurrent probe per node */ }
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `go test ./internal/pool -race -v`
 
 Expected: compilation failure because registry and selectors do not exist.
 
-- [ ] **Step 3: Implement concurrency-safe registry, leases, and selectors**
+- [x] **Step 3: Implement concurrency-safe registry, leases, and selectors**
 
 Use ordinary mutexes for compound state transitions; do not use a lock-free cursor that can advance independently of success. Store only sanitized failure classes in status state.
 
-- [ ] **Step 4: Run GREEN repeatedly under race detector**
+- [x] **Step 4: Run GREEN repeatedly under race detector**
 
 Run: `go test ./internal/pool -race -count=25`
 
 Expected: 25 passing runs and no race reports.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/pool
@@ -221,7 +221,7 @@ git commit -m "feat: add shared health and independent rotation"
 - Cancellation and timeouts close partial connections.
 - Runtime replacement does not close an actively leased dialer.
 
-- [ ] **Step 1: Write failing fake-dialer and minimal real-runtime tests**
+- [x] **Step 1: Write failing fake-dialer and minimal real-runtime tests**
 
 ```go
 func TestFactoryRejectsNonProxyOutbound(t *testing.T) { /* direct/block/urltest rejected */ }
@@ -230,23 +230,23 @@ func TestProbeHonorsCancellation(t *testing.T) { /* stalled dial exits with cont
 func TestLeasedRuntimeSurvivesReplacement(t *testing.T) { /* close happens after lease */ }
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `go test ./internal/proxycore -v`
 
 Expected: compilation failure for missing factory and prober.
 
-- [ ] **Step 3: Implement the sing-box adapter using pinned public APIs**
+- [x] **Step 3: Implement the sing-box adapter using pinned public APIs**
 
 Port only the outbound construction/registration needed from the attributed Easy Proxies integration. Wrap errors at the protocol/type level and pass every message through redaction before logging.
 
-- [ ] **Step 4: Run GREEN and dependency audit**
+- [x] **Step 4: Run GREEN and dependency audit**
 
 Run: `go test ./internal/proxycore -race -v && go vet ./... && govulncheck ./...`
 
 Expected: tests and vet pass; any reachable vulnerability blocks completion and requires a compatible dependency upgrade.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/proxycore go.mod go.sum NOTICE
@@ -277,7 +277,7 @@ git commit -m "feat: add sing-box outbound runtime"
 - All nodes failing returns a generic 502 without endpoint or credential data.
 - Bidirectional tunnel copy handles half-close and shutdown without goroutine leaks.
 
-- [ ] **Step 1: Write failing protocol tests with fake dialers**
+- [x] **Step 1: Write failing protocol tests with fake dialers**
 
 ```go
 func TestProxyRequiresAuthenticationBeforeDial(t *testing.T) { /* assert 407 and zero dial calls */ }
@@ -287,23 +287,23 @@ func TestKeepAlivePinsNode(t *testing.T) { /* two requests over one client TCP c
 func TestUpgradePinsUntilClose(t *testing.T) { /* bidirectional echo stays on selected node */ }
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `go test ./internal/httpproxy -race -v`
 
 Expected: compilation failure because proxy server is absent.
 
-- [ ] **Step 3: Implement authentication, CONNECT tunneling, HTTP forwarding, and connection sessions**
+- [x] **Step 3: Implement authentication, CONNECT tunneling, HTTP forwarding, and connection sessions**
 
 Use constant-time credential comparison, strip hop-by-hop and proxy authorization headers before forwarding, cap error bodies, and set explicit header/read-idle timeouts without imposing a lifetime timeout on established tunnels.
 
-- [ ] **Step 4: Run GREEN under race and leak-sensitive repetition**
+- [x] **Step 4: Run GREEN under race and leak-sensitive repetition**
 
 Run: `go test ./internal/httpproxy -race -count=20`
 
 Expected: all runs pass without races or hanging goroutines.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/httpproxy
@@ -331,7 +331,7 @@ git commit -m "feat: add connection-pinned HTTP proxy"
 - `/status` never contains configured secrets, subscription URLs, node options, addresses, or tags.
 - Refresh cannot overlap and shutdown drains active tunnels for the configured period.
 
-- [ ] **Step 1: Write failing orchestration tests**
+- [x] **Step 1: Write failing orchestration tests**
 
 ```go
 func TestAppSharesRegistryButNotSelectors(t *testing.T) { /* dependency spy checks identity */ }
@@ -340,23 +340,23 @@ func TestStatusIsRedacted(t *testing.T) { /* marshal and search for seeded secre
 func TestShutdownDrainsConnections(t *testing.T) { /* active tunnel completes within drain window */ }
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `go test ./internal/app ./internal/admin -race -v`
 
 Expected: compilation failure for missing app/admin packages.
 
-- [ ] **Step 3: Implement orchestration and loopback-only admin server**
+- [x] **Step 3: Implement orchestration and loopback-only admin server**
 
 Use `signal.NotifyContext` in main for SIGINT/SIGTERM. Start refresh immediately, admit only probed nodes, and expose source failures by numeric source ID.
 
-- [ ] **Step 4: Run GREEN and the whole suite**
+- [x] **Step 4: Run GREEN and the whole suite**
 
 Run: `go test ./... -race && go vet ./...`
 
 Expected: all packages pass and vet exits 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add cmd internal/app internal/admin
@@ -388,7 +388,7 @@ git commit -m "feat: run dual proxy gateway"
 - WSL build and tests pass on Ubuntu 24.04.
 - Live smoke test uses the first available real subscription without logging its URL/body; the currently HTTP-404 source is reported only as `source 2: HTTP 404`.
 
-- [ ] **Step 1: Write failing integration and deployment static tests**
+- [x] **Step 1: Write failing integration and deployment static tests**
 
 ```go
 func TestDualListenersRotateIndependently(t *testing.T) { /* fake proxies expose distinct IDs */ }
@@ -398,17 +398,17 @@ func TestWebSocketTunnelStaysPinned(t *testing.T) { /* echo server identifies on
 
 Add a shell test that rejects `0.0.0.0/0`, missing systemd hardening, world-readable env files, and unscoped `ufw allow <port>`.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `go test ./tests/integration -race -v && bash tests/test_deploy.sh`
 
 Expected: failure because packaging, service, and smoke behavior are absent.
 
-- [ ] **Step 3: Implement packaging, deployment scripts, README, and WSL smoke runner**
+- [x] **Step 3: Implement packaging, deployment scripts, README, and WSL smoke runner**
 
 Document LAN client configuration separately for HTTP and WS proxy ports. Include commands for status, logs, manual refresh, upgrades, rollback, and complete uninstall.
 
-- [ ] **Step 4: Run GREEN with full Windows/WSL verification**
+- [x] **Step 4: Run GREEN with full Windows/WSL verification**
 
 Run on WSL Ubuntu 24.04:
 
@@ -423,7 +423,7 @@ bash scripts/smoke-wsl.sh
 
 Expected: unit/integration/deployment tests pass, Linux binary and Docker image build, both local proxy listeners make successful authenticated connections, rotations remain independent, and no secret appears in captured output.
 
-- [ ] **Step 5: Run security and repository checks**
+- [x] **Step 5: Run security and repository checks**
 
 Run:
 
@@ -435,7 +435,7 @@ git status --short
 
 Expected: no reachable vulnerability; secret grep returns no matches; only intended changes are present.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add Dockerfile docker-compose.example.yml deploy scripts tests README.md
@@ -447,3 +447,15 @@ git commit -m "feat: package and verify Ubuntu gateway"
 - Before Task 1, inspect the selected Easy Proxies upstream commit and record its immutable commit ID in `NOTICE`.
 - The first supplied subscription currently returns valid sing-box JSON with 29 proxy outbounds under a sing-box User-Agent; the second currently returns HTTP 404 for all tested User-Agents. These observations are test-environment state, not committed configuration.
 - If the pinned sing-box API cannot support safe independent outbound lifecycles, stop that task and switch to a supervised sing-box subprocess with loopback-only internal listeners; do not weaken connection drain, retry, or secret-handling requirements.
+
+## Completion Evidence
+
+- WSL Ubuntu 24.04 with Go 1.26.8: `go test ./... -race -count=3` passed.
+- `go vet ./...` passed.
+- `govulncheck ./...` reported 0 reachable vulnerabilities.
+- Linux static binary build passed.
+- Docker image build passed; runtime user is `65532:65532`.
+- ShellCheck completed with no findings for deployment, uninstall, smoke, and test scripts.
+- Repository and deployment safety tests passed.
+- Live user-subscription smoke test passed on both independent proxy listeners and demonstrated multiple distinct egress addresses without logging them.
+- Independent production code review completed with no remaining Critical or Important findings.
