@@ -95,3 +95,25 @@ func TestUncontendedAllFailedAttemptRollsBackReservation(t *testing.T) {
 		t.Fatalf("next candidate after all-failed rollback = %q", got)
 	}
 }
+
+func TestConcurrentAllFailedAttemptsDoNotAdvanceCursor(t *testing.T) {
+	selector := NewSelector()
+	candidates := []Candidate{{ID: "a", Eligible: true}, {ID: "b", Eligible: true}, {ID: "c", Eligible: true}}
+	first := selector.Begin(candidates)
+	second := selector.Begin(candidates)
+	for {
+		if _, ok := first.Next(); !ok {
+			break
+		}
+	}
+	for {
+		if _, ok := second.Next(); !ok {
+			break
+		}
+	}
+	first.Abort()
+	second.Abort()
+	if got := nextID(t, selector, candidates); got != "a" {
+		t.Fatalf("next candidate after concurrent all-failed attempts = %q", got)
+	}
+}

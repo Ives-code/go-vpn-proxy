@@ -102,7 +102,32 @@ func parseClash(body []byte) ([]NodeSpec, bool, error) {
 	if unsupportedType(proxies) != "" {
 		return nil, true, errors.New("subscription contains an unsupported proxy protocol")
 	}
+	for _, entry := range proxies {
+		if item, ok := entry.(map[string]any); ok {
+			if err := validateClashNode(item); err != nil {
+				return nil, true, err
+			}
+		}
+	}
 	return nodesFromClash(proxies), true, nil
+}
+
+func validateClashNode(input map[string]any) error {
+	if strings.ToLower(stringValue(input, "type")) != "vless" {
+		return nil
+	}
+	security := strings.ToLower(stringValue(input, "security"))
+	if !oneOf(security, "", "none", "tls", "reality") {
+		return errors.New("subscription contains unsupported VLESS security")
+	}
+	network := strings.ToLower(stringValue(input, "network"))
+	if !oneOf(network, "", "tcp", "ws", "websocket", "grpc", "http", "h2") {
+		return errors.New("subscription contains unsupported VLESS transport")
+	}
+	if reality, ok := input["reality-opts"].(map[string]any); ok && stringValue(reality, "public-key") == "" {
+		return errors.New("subscription contains unsupported incomplete VLESS Reality options")
+	}
+	return nil
 }
 
 func validateStructure(root any) error {
@@ -221,7 +246,8 @@ func normalizeClashNode(input map[string]any) (map[string]any, bool) {
 	}
 	output["uuid"] = uuid
 	copyString(output, input, "flow")
-	if boolValue(input["tls"]) || strings.EqualFold(stringValue(input, "security"), "tls") || stringValue(input, "reality-opts") != "" {
+	_, hasReality := input["reality-opts"].(map[string]any)
+	if boolValue(input["tls"]) || oneOf(strings.ToLower(stringValue(input, "security")), "tls", "reality") || hasReality {
 		output["tls"] = clashTLS(input)
 	}
 	if transport := clashTransport(input); transport != nil {
@@ -329,6 +355,11 @@ func parseURIs(text string) ([]NodeSpec, error) {
 		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 			continue
 		}
+		if strings.EqualFold(parsed.Scheme, "vless") {
+			if err := validateVLESSURI(parsed); err != nil {
+				return nil, err
+			}
+		}
 		normalized, ok := normalizeURINode(parsed)
 		if !ok {
 			if scheme := strings.ToLower(parsed.Scheme); scheme != "vless" && scheme != "http" && scheme != "https" {
@@ -352,6 +383,22 @@ func parseURIs(text string) ([]NodeSpec, error) {
 		return nil, fmt.Errorf("subscription contains no supported proxy nodes")
 	}
 	return nodes, nil
+}
+
+func validateVLESSURI(parsed *url.URL) error {
+	query := parsed.Query()
+	security := strings.ToLower(query.Get("security"))
+	if !oneOf(security, "", "none", "tls", "reality") {
+		return errors.New("subscription contains unsupported VLESS security")
+	}
+	transport := strings.ToLower(query.Get("type"))
+	if !oneOf(transport, "", "tcp", "ws", "websocket", "grpc", "http", "h2") {
+		return errors.New("subscription contains unsupported VLESS transport")
+	}
+	if security == "reality" && query.Get("pbk") == "" {
+		return errors.New("subscription contains unsupported incomplete VLESS Reality options")
+	}
+	return nil
 }
 
 func normalizeURINode(parsed *url.URL) (map[string]any, bool) {
@@ -480,6 +527,15 @@ func firstNonEmpty(values ...string) string {
 func queryTruthy(query url.Values, key string) bool {
 	value := query.Get(key)
 	return value == "1" || strings.EqualFold(value, "true")
+}
+
+func oneOf(value string, allowed ...string) bool {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func digest(value []byte) string {

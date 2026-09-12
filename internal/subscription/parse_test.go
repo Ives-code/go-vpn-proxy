@@ -114,3 +114,19 @@ func TestParseRejectsExcessiveStructuralComplexity(t *testing.T) {
 		t.Fatalf("expected complexity error, got %v", err)
 	}
 }
+
+func TestParseRejectsUnknownVLESSSecurityAndTransport(t *testing.T) {
+	for name, body := range map[string][]byte{
+		"unknown-security":   []byte("vless://id@edge.invalid:443?security=unknown\n"),
+		"unknown-transport":  []byte("vless://id@edge.invalid:443?type=quic\n"),
+		"clash-transport":    []byte("proxies:\n  - name: node\n    type: vless\n    server: edge.invalid\n    port: 443\n    uuid: id\n    network: quic\n"),
+		"incomplete-reality": []byte("vless://id@edge.invalid:443?security=reality&sni=edge.invalid\n"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Parse(body, "")
+			if err == nil || !strings.Contains(err.Error(), "unsupported") {
+				t.Fatalf("expected fail-closed normalization error, got %v", err)
+			}
+		})
+	}
+}

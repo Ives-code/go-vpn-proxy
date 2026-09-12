@@ -55,13 +55,37 @@ grep -Fq 'LAN_CIDR' deploy/install-ubuntu.sh || {
   exit 1
 }
 validation_line="$(grep -n 'ipaddress.ip_network' deploy/install-ubuntu.sh | head -1 | cut -d: -f1)"
-start_line="$(grep -n 'systemctl enable --now' deploy/install-ubuntu.sh | head -1 | cut -d: -f1)"
+start_line="$(grep -n 'systemctl restart' deploy/install-ubuntu.sh | head -1 | cut -d: -f1)"
 [[ -n "${validation_line}" && -n "${start_line}" && "${validation_line}" -lt "${start_line}" ]] || {
   printf 'FAIL: LAN_CIDR must be validated before the service starts\n' >&2
   exit 1
 }
 grep -Fq 'ufw --force delete allow from' deploy/uninstall-ubuntu.sh || {
   printf 'FAIL: uninstaller must remove the exact UFW rules created by install\n' >&2
+  exit 1
+}
+grep -Fq 'readonly FIREWALL_STATE="${CONFIG_DIR}/ufw-cidr"' deploy/install-ubuntu.sh || {
+  printf 'FAIL: firewall state must be stored in the root-managed config directory\n' >&2
+  exit 1
+}
+if grep -Fq '${STATE_DIR}/ufw-cidr' deploy/install-ubuntu.sh; then
+  printf 'FAIL: firewall state must not be stored in the service-writable state directory\n' >&2
+  exit 1
+fi
+for marker in 'added_http_rule=1' 'added_ws_rule=1' 'restore_previous_firewall'; do
+  grep -Fq -- "${marker}" deploy/install-ubuntu.sh || {
+    printf 'FAIL: installer lacks transactional firewall marker %s\n' "${marker}" >&2
+    exit 1
+  }
+done
+for marker in 'backup_previous_install' 'restore_previous_install'; do
+  grep -Fq -- "${marker}" deploy/install-ubuntu.sh || {
+    printf 'FAIL: installer lacks upgrade rollback marker %s\n' "${marker}" >&2
+    exit 1
+  }
+done
+grep -Fq 'systemctl restart "${APP_NAME}.service"' deploy/install-ubuntu.sh || {
+  printf 'FAIL: installer must restart an already-running service after upgrade\n' >&2
   exit 1
 }
 if grep -Eq 'ufw allow[[:space:]]+[0-9]+/tcp' deploy/install-ubuntu.sh; then

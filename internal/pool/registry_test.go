@@ -136,3 +136,19 @@ func TestHealthyNodeBecomesDueForPeriodicProbe(t *testing.T) {
 	registry.MarkSuccess("a", time.Millisecond)
 	_ = leases[0].Close()
 }
+
+func TestHealthMethodsReportOnlyActualTransitions(t *testing.T) {
+	registry, _ := healthyRegistry(t, "a")
+	if !registry.MarkFailure("a", context.DeadlineExceeded) {
+		t.Fatal("first failure was not reported as a transition")
+	}
+	if registry.MarkFailure("a", context.DeadlineExceeded) {
+		t.Fatal("repeated failure was reported as a transition")
+	}
+	if !registry.MarkSuccess("a", time.Millisecond) {
+		t.Fatal("recovery was not reported as a transition")
+	}
+	if registry.MarkSuccess("a", time.Millisecond) {
+		t.Fatal("repeated success was reported as a transition")
+	}
+}

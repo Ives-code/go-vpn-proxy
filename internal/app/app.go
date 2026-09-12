@@ -223,12 +223,13 @@ func probeDue(ctx context.Context, registry *pool.Registry, prober Prober, concu
 			latency, err := prober.Probe(probeContext, lease.Dialer)
 			cancel()
 			if err != nil {
-				registry.MarkFailure(lease.ID, err)
-				if len(loggers) > 0 && loggers[0] != nil {
-					loggers[0].Warn("proxy node health probe failed", "node_id", lease.ID)
+				if registry.MarkFailure(lease.ID, err) && len(loggers) > 0 && loggers[0] != nil {
+					loggers[0].Warn("proxy node became unhealthy", "node_id", lease.ID, "source_ids", registry.SourceIDs(lease.ID), "failure_class", "health_probe")
 				}
 			} else {
-				registry.MarkSuccess(lease.ID, latency)
+				if registry.MarkSuccess(lease.ID, latency) && len(loggers) > 0 && loggers[0] != nil {
+					loggers[0].Info("proxy node recovered", "node_id", lease.ID, "source_ids", registry.SourceIDs(lease.ID))
+				}
 			}
 			_ = lease.Close()
 		}()

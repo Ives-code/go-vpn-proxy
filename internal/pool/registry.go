@@ -140,31 +140,45 @@ func (registry *Registry) Apply(snapshot subscription.Snapshot) (Diff, error) {
 	return diff, nil
 }
 
-func (registry *Registry) MarkFailure(id string, cause error) {
+func (registry *Registry) MarkFailure(id string, cause error) bool {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 	state, ok := registry.nodes[id]
 	if !ok {
-		return
+		return false
 	}
+	transitioned := state.healthy || state.lastFailure == ""
 	state.healthy = false
 	state.nextProbe = time.Now().Add(registry.probeInterval)
 	if cause != nil {
 		state.lastFailure = failureClass(cause)
 	}
+	return transitioned
 }
 
-func (registry *Registry) MarkSuccess(id string, latency time.Duration) {
+func (registry *Registry) MarkSuccess(id string, latency time.Duration) bool {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 	state, ok := registry.nodes[id]
 	if !ok || state.removed {
-		return
+		return false
 	}
+	transitioned := !state.healthy
 	state.healthy = true
 	state.latency = latency
 	state.lastFailure = ""
 	state.nextProbe = time.Now().Add(registry.probeInterval)
+	return transitioned
+}
+
+func (registry *Registry) SourceIDs(id string) []string {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	state := registry.nodes[id]
+	if state == nil {
+		return nil
+	}
+	return append([]string(nil), state.spec.SourceIDs...)
 }
 
 func (registry *Registry) RoutingSnapshot() []Candidate {

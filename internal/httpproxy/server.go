@@ -127,7 +127,9 @@ func (session *connectionSession) dial(ctx context.Context, network, address str
 	if session.selected != nil {
 		conn, err := session.selected.Dialer.DialContext(ctx, network, address)
 		if err != nil {
-			session.server.registry.MarkFailure(session.selected.ID, err)
+			if session.server.registry.MarkFailure(session.selected.ID, err) {
+				session.server.logger.Warn("proxy node became unhealthy", "listener", session.server.name, "node_id", session.selected.ID, "source_ids", session.server.registry.SourceIDs(session.selected.ID), "failure_class", "dial")
+			}
 		}
 		return conn, err
 	}
@@ -157,12 +159,15 @@ func (session *connectionSession) dial(ctx context.Context, network, address str
 		conn, err := lease.Dialer.DialContext(dialContext, network, address)
 		cancel()
 		if err != nil {
-			session.server.registry.MarkFailure(id, err)
-			session.server.logger.Warn("proxy node dial failed", "listener", session.server.name, "node_id", id)
+			if session.server.registry.MarkFailure(id, err) {
+				session.server.logger.Warn("proxy node became unhealthy", "listener", session.server.name, "node_id", id, "source_ids", session.server.registry.SourceIDs(id), "failure_class", "dial")
+			}
 			_ = lease.Close()
 			continue
 		}
-		session.server.registry.MarkSuccess(id, 0)
+		if session.server.registry.MarkSuccess(id, 0) {
+			session.server.logger.Info("proxy node recovered", "listener", session.server.name, "node_id", id, "source_ids", session.server.registry.SourceIDs(id))
+		}
 		attempt.Commit(id)
 		session.selected = lease
 		return conn, nil

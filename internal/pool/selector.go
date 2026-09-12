@@ -1,17 +1,26 @@
 package pool
 
-import "sync/atomic"
+import "sync"
 
-// Selector assigns a monotonically increasing reservation ticket to each new
-// connection. Tickets give concurrent connections distinct round-robin starts;
-// a successful attempt can move the high-water mark forward when it skipped
-// failed nodes, but can never move it backward.
+// Selector allows concurrent connection attempts to reserve distinct starts,
+// while retiring their success/abort results in ticket order. Only successful
+// attempts advance the committed cursor.
 type Selector struct {
-	next atomic.Uint64
+	mu              sync.Mutex
+	cursor          uint64
+	reservationNext uint64
+	nextTicket      uint64
+	retireTicket    uint64
+	results         map[uint64]reservationResult
+}
+
+type reservationResult struct {
+	committed bool
+	target    uint64
 }
 
 func NewSelector() *Selector {
-	return &Selector{}
+	return &Selector{results: make(map[uint64]reservationResult)}
 }
 
 func (selector *Selector) Begin(candidates []Candidate) *Attempt {
@@ -19,25 +28,32 @@ func (selector *Selector) Begin(candidates []Candidate) *Attempt {
 	if len(copyOfCandidates) == 0 {
 		return &Attempt{selector: selector}
 	}
-	ticket := selector.next.Add(1) - 1
+	selector.mu.Lock()
+	ticket := selector.nextTicket
+	selector.nextTicket++
+	startAbsolute := selector.reservationNext
+	selector.reservationNext++
+	selector.mu.Unlock()
 	return &Attempt{
-		selector:   selector,
-		candidates: copyOfCandidates,
-		start:      int(ticket % uint64(len(copyOfCandidates))),
-		ticket:     ticket,
-		reserved:   true,
+		selector:      selector,
+		candidates:    copyOfCandidates,
+		start:         int(startAbsolute % uint64(len(copyOfCandidates))),
+		startAbsolute: startAbsolute,
+		ticket:        ticket,
+		reserved:      true,
 	}
 }
 
 type Attempt struct {
-	selector   *Selector
-	candidates []Candidate
-	start      int
-	offset     int
-	returned   map[string]int
-	ticket     uint64
-	reserved   bool
-	finished   bool
+	selector      *Selector
+	candidates    []Candidate
+	start         int
+	offset        int
+	returned      map[string]int
+	startAbsolute uint64
+	ticket        uint64
+	reserved      bool
+	finished      bool
 }
 
 func (attempt *Attempt) Next() (string, bool) {
@@ -69,23 +85,35 @@ func (attempt *Attempt) Commit(id string) {
 	if !ok {
 		return
 	}
-	target := attempt.ticket + uint64(offset) + 1
-	for {
-		current := attempt.selector.next.Load()
-		if current >= target || attempt.selector.next.CompareAndSwap(current, target) {
-			break
-		}
-	}
+	target := attempt.startAbsolute + uint64(offset) + 1
+	attempt.selector.finish(attempt.ticket, reservationResult{committed: true, target: target})
 	attempt.finished = true
 }
 
-// Abort rolls back an uncontended reservation. If another connection has
-// already reserved a later ticket, retaining this ticket avoids duplicating a
-// start already assigned to that concurrent connection.
 func (attempt *Attempt) Abort() {
 	if attempt.finished || !attempt.reserved {
 		return
 	}
-	attempt.selector.next.CompareAndSwap(attempt.ticket+1, attempt.ticket)
+	attempt.selector.finish(attempt.ticket, reservationResult{})
 	attempt.finished = true
+}
+
+func (selector *Selector) finish(ticket uint64, result reservationResult) {
+	selector.mu.Lock()
+	defer selector.mu.Unlock()
+	selector.results[ticket] = result
+	for {
+		next, ok := selector.results[selector.retireTicket]
+		if !ok {
+			break
+		}
+		if next.committed && next.target > selector.cursor {
+			selector.cursor = next.target
+		}
+		delete(selector.results, selector.retireTicket)
+		selector.retireTicket++
+	}
+	if selector.retireTicket == selector.nextTicket {
+		selector.reservationNext = selector.cursor
+	}
 }

@@ -4,14 +4,23 @@ set -Eeuo pipefail
 readonly APP_NAME="dual-egress-gateway"
 readonly CONFIG_DIR="/etc/${APP_NAME}"
 readonly STATE_DIR="/var/lib/${APP_NAME}"
-readonly FIREWALL_STATE="${STATE_DIR}/ufw-cidr"
+readonly FIREWALL_STATE="${CONFIG_DIR}/ufw-cidr"
 
 [[ "${EUID}" -eq 0 ]] || { printf 'run as root\n' >&2; exit 1; }
 systemctl disable --now "${APP_NAME}.service" 2>/dev/null || true
 
-if [[ -r "${FIREWALL_STATE}" ]] && command -v ufw >/dev/null 2>&1; then
+if [[ -e "${FIREWALL_STATE}" || -L "${FIREWALL_STATE}" ]]; then
+  [[ -f "${FIREWALL_STATE}" && ! -L "${FIREWALL_STATE}" ]] || {
+    printf 'refusing unsafe firewall state file\n' >&2
+    exit 1
+  }
   lan_cidr="$(<"${FIREWALL_STATE}")"
-  if [[ -n "${lan_cidr}" ]]; then
+  python3 - "${lan_cidr}" <<'PY'
+import ipaddress
+import sys
+ipaddress.ip_network(sys.argv[1], strict=False)
+PY
+  if command -v ufw >/dev/null 2>&1; then
     ufw --force delete allow from "${lan_cidr}" to any port 18080 proto tcp >/dev/null 2>&1 || true
     ufw --force delete allow from "${lan_cidr}" to any port 18081 proto tcp >/dev/null 2>&1 || true
   fi

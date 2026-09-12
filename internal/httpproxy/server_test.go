@@ -113,7 +113,7 @@ func TestFailureLogsUseAnonymousIDsWithoutRawErrors(t *testing.T) {
 	_, _ = http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodConnect})
 
 	logs := output.String()
-	if !strings.Contains(logs, `"node_id":"a"`) || !strings.Contains(logs, `"listener":"test"`) {
+	if !strings.Contains(logs, `"node_id":"a"`) || !strings.Contains(logs, `"listener":"test"`) || !strings.Contains(logs, `"failure_class":"dial"`) {
 		t.Fatalf("missing anonymous diagnostics: %s", logs)
 	}
 	for _, forbidden := range []string{"secret-endpoint.invalid", "target.invalid"} {
@@ -353,6 +353,43 @@ func TestShutdownClosesHijackedTunnelAfterDrainDeadline(t *testing.T) {
 	}
 	if active := fixture.server.ActiveConnections(); active != 0 {
 		t.Fatalf("active connections after forced drain = %d", active)
+	}
+}
+
+func TestHTTPUpgradePreservesResponseAfterClientHalfClose(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		client, _, err := response.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		defer client.Close()
+		_, _ = client.Write([]byte("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n"))
+		_, _ = io.ReadAll(client)
+		_, _ = client.Write([]byte("upgrade-response-after-eof\n"))
+	}))
+	defer origin.Close()
+	fixture := newProxyFixture(t, nil)
+	conn, err := net.Dial("tcp", fixture.listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	tcpConn := conn.(*net.TCPConn)
+	defer tcpConn.Close()
+	auth := base64.StdEncoding.EncodeToString([]byte("user:password"))
+	_, _ = fmt.Fprintf(tcpConn, "GET %s/ HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nProxy-Authorization: Basic %s\r\n\r\n", origin.URL, strings.TrimPrefix(origin.URL, "http://"), auth)
+	reader := bufio.NewReader(tcpConn)
+	response, err := http.ReadResponse(reader, &http.Request{Method: http.MethodGet})
+	if err != nil || response.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("upgrade response=%v err=%v", response, err)
+	}
+	_, _ = tcpConn.Write([]byte("upgrade-request"))
+	if err := tcpConn.CloseWrite(); err != nil {
+		t.Fatalf("CloseWrite: %v", err)
+	}
+	_ = tcpConn.SetReadDeadline(time.Now().Add(time.Second))
+	line, err := reader.ReadString('\n')
+	if err != nil || line != "upgrade-response-after-eof\n" {
+		t.Fatalf("upgrade half-close response=%q err=%v", line, err)
 	}
 }
 

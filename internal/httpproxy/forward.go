@@ -102,8 +102,20 @@ func (server *Server) handleUpgrade(response http.ResponseWriter, request *http.
 
 	var wait sync.WaitGroup
 	wait.Add(2)
-	go func() { defer wait.Done(); _, _ = io.Copy(upstream, client); _ = upstream.Close() }()
-	go func() { defer wait.Done(); _, _ = io.Copy(client, upstream); _ = client.Close() }()
+	go func() {
+		defer wait.Done()
+		_, _ = io.Copy(upstream, client)
+		if closeWriter, ok := upstream.(interface{ CloseWrite() error }); ok {
+			_ = closeWriter.CloseWrite()
+		}
+	}()
+	go func() {
+		defer wait.Done()
+		_, _ = io.Copy(client, upstream)
+		if closeWriter, ok := client.(interface{ CloseWrite() error }); ok {
+			_ = closeWriter.CloseWrite()
+		}
+	}()
 	wait.Wait()
 }
 

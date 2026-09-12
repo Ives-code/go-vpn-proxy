@@ -69,8 +69,10 @@ sudo LAN_CIDR=192.168.1.0/24 bash deploy/install-ubuntu.sh \
 ```
 
 Omit `LAN_CIDR` to leave UFW unchanged. The installer creates a dedicated
-unprivileged user and a hardened service. To remove the service while preserving
-configuration and state:
+unprivileged user and a hardened service. Upgrades back up the previous binary,
+configuration, environment, unit, and managed UFW rules; a failed restart
+restores the previous installation automatically. To remove the service while
+preserving configuration and state:
 
 ```bash
 sudo bash deploy/uninstall-ubuntu.sh
