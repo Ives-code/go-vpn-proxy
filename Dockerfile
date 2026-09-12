@@ -3,7 +3,8 @@ FROM golang:1.26.8-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
-COPY . .
+COPY cmd ./cmd
+COPY internal ./internal
 RUN CGO_ENABLED=0 go build \
     -tags "with_quic with_utls with_grpc" \
     -trimpath -ldflags="-s -w" \

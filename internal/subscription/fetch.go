@@ -20,11 +20,19 @@ func NewHTTPFetcher(client *http.Client, maxBytes int64) *HTTPFetcher {
 		client = http.DefaultClient
 	}
 	checkedClient := *client
+	checkedClient.Jar = nil
 	previousRedirect := checkedClient.CheckRedirect
 	checkedClient.CheckRedirect = func(request *http.Request, via []*http.Request) error {
 		if request.URL.Scheme != "https" {
 			return errors.New("subscription redirect must use HTTPS")
 		}
+		if len(via) > 0 && (request.URL.Scheme != via[0].URL.Scheme || request.URL.Host != via[0].URL.Host) {
+			return errors.New("subscription redirect must remain on the original origin")
+		}
+		request.Header.Del("Referer")
+		request.Header.Del("Cookie")
+		request.Header.Del("Authorization")
+		request.Header.Del("Proxy-Authorization")
 		if previousRedirect != nil {
 			return previousRedirect(request, via)
 		}

@@ -132,7 +132,7 @@ func (application *App) Refresh(ctx context.Context) error {
 		if _, applyErr := application.registry.Apply(snapshot); applyErr != nil {
 			return fmt.Errorf("apply subscription snapshot: %w", applyErr)
 		}
-		probeDue(ctx, application.registry, application.prober, 16)
+		probeDue(ctx, application.registry, application.prober, 16, application.config.DialTimeout, application.logger)
 	}
 	application.statusMu.Lock()
 	application.lastRefresh = time.Now().UTC()
@@ -170,8 +170,8 @@ func (application *App) backgroundLoop(ctx context.Context, done chan<- struct{}
 			if err := application.Refresh(ctx); err != nil {
 				application.logger.Warn("subscription refresh was partial or failed", "error", err)
 			}
-		case now := <-probeTicker.C:
-			probeDue(ctx, application.registry, application.prober, 16, now)
+		case <-probeTicker.C:
+			probeDue(ctx, application.registry, application.prober, 16, application.config.DialTimeout, application.logger)
 		}
 	}
 }
@@ -202,14 +202,13 @@ func listenAll(addresses []string, listen func(string, string) (net.Listener, er
 	return listeners, nil
 }
 
-func probeDue(ctx context.Context, registry *pool.Registry, prober Prober, concurrency int, at ...time.Time) {
-	now := time.Now()
-	if len(at) > 0 {
-		now = at[0]
-	}
-	leases := registry.ProbeDue(now)
+func probeDue(ctx context.Context, registry *pool.Registry, prober Prober, concurrency int, timeout time.Duration, loggers ...*slog.Logger) {
+	leases := registry.ProbeDue(time.Now())
 	if concurrency < 1 {
 		concurrency = 1
+	}
+	if timeout <= 0 {
+		timeout = 10 * time.Second
 	}
 	semaphore := make(chan struct{}, concurrency)
 	var wait sync.WaitGroup
@@ -220,9 +219,14 @@ func probeDue(ctx context.Context, registry *pool.Registry, prober Prober, concu
 			defer wait.Done()
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
-			latency, err := prober.Probe(ctx, lease.Dialer)
+			probeContext, cancel := context.WithTimeout(ctx, timeout)
+			latency, err := prober.Probe(probeContext, lease.Dialer)
+			cancel()
 			if err != nil {
 				registry.MarkFailure(lease.ID, err)
+				if len(loggers) > 0 && loggers[0] != nil {
+					loggers[0].Warn("proxy node health probe failed", "node_id", lease.ID)
+				}
 			} else {
 				registry.MarkSuccess(lease.ID, latency)
 			}

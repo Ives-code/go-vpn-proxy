@@ -20,6 +20,7 @@ import (
 type factory struct {
 	mu       sync.Mutex
 	sequence map[string][]string
+	failing  map[string]bool
 }
 
 type dialer struct {
@@ -31,7 +32,39 @@ func (dialer *dialer) DialContext(ctx context.Context, network, address string) 
 	dialer.factory.mu.Lock()
 	dialer.factory.sequence[address] = append(dialer.factory.sequence[address], dialer.id)
 	dialer.factory.mu.Unlock()
+	if dialer.factory.failing[dialer.id] {
+		return nil, fmt.Errorf("simulated failure")
+	}
 	return (&net.Dialer{}).DialContext(ctx, network, address)
+}
+
+func TestFailureOnHTTPListenerIsSharedWithWSListener(t *testing.T) {
+	factory := &factory{sequence: make(map[string][]string), failing: map[string]bool{"a": true}}
+	registry := pool.NewRegistry(factory, time.Minute)
+	if _, err := registry.Apply(subscription.Snapshot{Nodes: []subscription.NodeSpec{{ID: "a"}, {ID: "b"}}}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	for _, id := range []string{"a", "b"} {
+		registry.MarkSuccess(id, time.Millisecond)
+	}
+	httpTarget := startEcho(t)
+	wsTarget := startEcho(t)
+	httpAddress, stopHTTP := startGateway(t, "http", registry, pool.NewSelector())
+	defer stopHTTP()
+	wsAddress, stopWS := startGateway(t, "ws", registry, pool.NewSelector())
+	defer stopWS()
+
+	connectAndEcho(t, httpAddress, httpTarget)
+	connectAndEcho(t, wsAddress, wsTarget)
+
+	factory.mu.Lock()
+	defer factory.mu.Unlock()
+	if got := factory.sequence[httpTarget]; len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Fatalf("HTTP failover sequence = %#v", got)
+	}
+	if got := factory.sequence[wsTarget]; len(got) != 1 || got[0] != "b" {
+		t.Fatalf("WS did not share HTTP failure state: %#v", got)
+	}
 }
 
 func (*dialer) Close() error { return nil }

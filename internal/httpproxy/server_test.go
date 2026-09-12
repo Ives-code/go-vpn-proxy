@@ -2,11 +2,13 @@ package httpproxy
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -62,6 +64,10 @@ type proxyFixture struct {
 }
 
 func newProxyFixture(t *testing.T, failing map[string]bool) *proxyFixture {
+	return newProxyFixtureWithLogger(t, failing, nil)
+}
+
+func newProxyFixtureWithLogger(t *testing.T, failing map[string]bool, logger *slog.Logger) *proxyFixture {
 	t.Helper()
 	calls := &atomic.Int32{}
 	sequence := []string{}
@@ -83,7 +89,7 @@ func newProxyFixture(t *testing.T, failing map[string]bool) *proxyFixture {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	server := New("test", Config{Username: "user", Password: "password", DialTimeout: time.Second}, registry, pool.NewSelector(), nil)
+	server := New("test", Config{Username: "user", Password: "password", DialTimeout: time.Second}, registry, pool.NewSelector(), logger)
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -91,6 +97,30 @@ func newProxyFixture(t *testing.T, failing map[string]bool) *proxyFixture {
 		_ = server.Shutdown(ctx)
 	})
 	return &proxyFixture{server: server, listener: listener, registry: registry, calls: calls, sequence: &sequence}
+}
+
+func TestFailureLogsUseAnonymousIDsWithoutRawErrors(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, nil))
+	fixture := newProxyFixtureWithLogger(t, map[string]bool{"a": true, "b": true, "c": true}, logger)
+	conn, err := net.Dial("tcp", fixture.listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer conn.Close()
+	auth := base64.StdEncoding.EncodeToString([]byte("user:password"))
+	_, _ = fmt.Fprintf(conn, "CONNECT target.invalid:443 HTTP/1.1\r\nHost: target.invalid:443\r\nProxy-Authorization: Basic %s\r\n\r\n", auth)
+	_, _ = http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodConnect})
+
+	logs := output.String()
+	if !strings.Contains(logs, `"node_id":"a"`) || !strings.Contains(logs, `"listener":"test"`) {
+		t.Fatalf("missing anonymous diagnostics: %s", logs)
+	}
+	for _, forbidden := range []string{"secret-endpoint.invalid", "target.invalid"} {
+		if strings.Contains(logs, forbidden) {
+			t.Fatalf("logs leaked %q: %s", forbidden, logs)
+		}
+	}
 }
 
 func TestProxyRequiresAuthenticationBeforeDial(t *testing.T) {
@@ -108,6 +138,15 @@ func TestProxyRequiresAuthenticationBeforeDial(t *testing.T) {
 	}
 	if got := fixture.calls.Load(); got != 0 {
 		t.Fatalf("dial calls before auth = %d", got)
+	}
+}
+
+func TestBasicAuthenticationSchemeIsCaseInsensitive(t *testing.T) {
+	fixture := newProxyFixture(t, nil)
+	request := httptest.NewRequest(http.MethodGet, "http://example.invalid/", nil)
+	request.Header.Set("Proxy-Authorization", "bAsIc "+base64.StdEncoding.EncodeToString([]byte("user:password")))
+	if !fixture.server.authorized(request) {
+		t.Fatal("case-insensitive Basic scheme was rejected")
 	}
 }
 
@@ -246,6 +285,74 @@ func TestHTTPUpgradeStaysOnSelectedNode(t *testing.T) {
 	}
 	if got := append([]string(nil), (*fixture.sequence)...); len(got) != 1 || got[0] != "a" {
 		t.Fatalf("upgrade dial sequence = %#v", got)
+	}
+}
+
+func TestConnectPreservesResponseAfterClientHalfClose(t *testing.T) {
+	target, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("target listen: %v", err)
+	}
+	defer target.Close()
+	go func() {
+		conn, acceptErr := target.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = io.ReadAll(conn)
+		_, _ = conn.Write([]byte("response-after-eof\n"))
+	}()
+
+	fixture := newProxyFixture(t, nil)
+	conn := authenticatedConnect(t, fixture.listener.Addr().String(), target.Addr().String())
+	tcpConn, ok := conn.(*net.TCPConn)
+	if !ok {
+		conn.Close()
+		t.Fatalf("client connection type = %T", conn)
+	}
+	defer tcpConn.Close()
+	if _, err := tcpConn.Write([]byte("request-body")); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	if err := tcpConn.CloseWrite(); err != nil {
+		t.Fatalf("CloseWrite: %v", err)
+	}
+	line, err := bufio.NewReader(tcpConn).ReadString('\n')
+	if err != nil || line != "response-after-eof\n" {
+		t.Fatalf("half-close response=%q err=%v", line, err)
+	}
+}
+
+func TestShutdownClosesHijackedTunnelAfterDrainDeadline(t *testing.T) {
+	target, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("target listen: %v", err)
+	}
+	defer target.Close()
+	go func() {
+		conn, acceptErr := target.Accept()
+		if acceptErr == nil {
+			defer conn.Close()
+			_, _ = io.Copy(io.Discard, conn)
+		}
+	}()
+
+	fixture := newProxyFixture(t, nil)
+	conn := authenticatedConnect(t, fixture.listener.Addr().String(), target.Addr().String())
+	defer conn.Close()
+	deadlineContext, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_ = fixture.server.Shutdown(deadlineContext)
+	if elapsed := time.Since(started); elapsed < 40*time.Millisecond || elapsed > time.Second {
+		t.Fatalf("Shutdown duration = %s", elapsed)
+	}
+	for deadline := time.Now().Add(time.Second); fixture.server.ActiveConnections() != 0 && time.Now().Before(deadline); {
+		time.Sleep(time.Millisecond)
+	}
+	if active := fixture.server.ActiveConnections(); active != 0 {
+		t.Fatalf("active connections after forced drain = %d", active)
 	}
 }
 

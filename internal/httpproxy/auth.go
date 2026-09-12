@@ -9,10 +9,11 @@ import (
 
 func (server *Server) authorized(request *http.Request) bool {
 	header := request.Header.Get("Proxy-Authorization")
-	if !strings.HasPrefix(header, "Basic ") {
+	parts := strings.Fields(header)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Basic") {
 		return false
 	}
-	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(strings.TrimPrefix(header, "Basic ")))
+	decoded, err := base64.StdEncoding.DecodeString(parts[1])
 	if err != nil {
 		return false
 	}

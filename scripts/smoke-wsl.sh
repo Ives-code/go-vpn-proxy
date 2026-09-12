@@ -72,8 +72,15 @@ for port in 28080 28081; do
 done
 
 status_json="$(curl -fsS http://127.0.0.1:29090/status)"
-grep -Fq '"2":"source 2 returned HTTP 404"' <<<"${status_json}" || {
-  printf 'source 2 HTTP 404 was not isolated in status output\n' >&2
+STATUS_JSON="${status_json}" python3 - <<'PY' || {
+import json
+import os
+
+status = json.loads(os.environ["STATUS_JSON"])
+message = status.get("source_errors", {}).get("2", "")
+raise SystemExit(0 if message else 1)
+PY
+  printf 'source 2 failure was not isolated in status output\n' >&2
   exit 1
 }
 

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -19,6 +20,14 @@ var ignoredOutboundTypes = map[string]bool{
 	"block": true, "direct": true, "dns": true, "selector": true, "urltest": true,
 }
 
+var supportedProxyTypes = map[string]bool{"http": true, "vless": true}
+
+const (
+	MaxNodesPerSource  = 512
+	MaxStructureDepth  = 32
+	maxStructureValues = 100000
+)
+
 func Parse(body []byte, _ string) ([]NodeSpec, error) {
 	trimmed := bytes.TrimSpace(body)
 	if len(trimmed) == 0 {
@@ -26,23 +35,36 @@ func Parse(body []byte, _ string) ([]NodeSpec, error) {
 	}
 
 	if nodes, recognized, err := parseJSON(trimmed); recognized {
-		return nodes, err
+		return enforceNodeLimit(nodes, err)
 	}
 	if nodes, recognized, err := parseClash(trimmed); recognized {
-		return nodes, err
+		return enforceNodeLimit(nodes, err)
 	}
 
 	text := string(trimmed)
 	if decoded, ok := decodeBase64(text); ok {
 		text = decoded
 	}
-	return parseURIs(text)
+	return enforceNodeLimit(parseURIs(text))
+}
+
+func enforceNodeLimit(nodes []NodeSpec, err error) ([]NodeSpec, error) {
+	if err != nil {
+		return nil, err
+	}
+	if len(nodes) > MaxNodesPerSource {
+		return nil, fmt.Errorf("subscription exceeds node limit of %d", MaxNodesPerSource)
+	}
+	return nodes, nil
 }
 
 func parseJSON(body []byte) ([]NodeSpec, bool, error) {
 	var root any
 	if err := json.Unmarshal(body, &root); err != nil {
 		return nil, false, nil
+	}
+	if err := validateStructure(root); err != nil {
+		return nil, true, err
 	}
 
 	var entries []any
@@ -58,6 +80,9 @@ func parseJSON(body []byte) ([]NodeSpec, bool, error) {
 	default:
 		return nil, true, errors.New("JSON subscription root must be an object or array")
 	}
+	if unsupportedType(entries) != "" {
+		return nil, true, errors.New("subscription contains an unsupported proxy protocol")
+	}
 
 	return nodesFromMaps(entries, FormatSingBox, "tag"), true, nil
 }
@@ -67,11 +92,61 @@ func parseClash(body []byte) ([]NodeSpec, bool, error) {
 	if err := yaml.Unmarshal(body, &root); err != nil {
 		return nil, false, nil
 	}
+	if err := validateStructure(root); err != nil {
+		return nil, true, err
+	}
 	proxies, ok := root["proxies"].([]any)
 	if !ok {
 		return nil, false, nil
 	}
-	return nodesFromMaps(proxies, FormatClash, "name"), true, nil
+	if unsupportedType(proxies) != "" {
+		return nil, true, errors.New("subscription contains an unsupported proxy protocol")
+	}
+	return nodesFromClash(proxies), true, nil
+}
+
+func validateStructure(root any) error {
+	count := 0
+	var walk func(any, int) error
+	walk = func(value any, depth int) error {
+		if depth > MaxStructureDepth {
+			return errors.New("subscription structure is too complex")
+		}
+		count++
+		if count > maxStructureValues {
+			return errors.New("subscription structure is too complex")
+		}
+		switch typed := value.(type) {
+		case map[string]any:
+			for _, child := range typed {
+				if err := walk(child, depth+1); err != nil {
+					return err
+				}
+			}
+		case []any:
+			for _, child := range typed {
+				if err := walk(child, depth+1); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	return walk(root, 0)
+}
+
+func unsupportedType(entries []any) string {
+	for _, entry := range entries {
+		item, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		typeName := strings.ToLower(stringValue(item, "type"))
+		if typeName != "" && !ignoredOutboundTypes[typeName] && !supportedProxyTypes[typeName] {
+			return typeName
+		}
+	}
+	return ""
 }
 
 func nodesFromMaps(entries []any, format Format, nameKey string) []NodeSpec {
@@ -83,7 +158,7 @@ func nodesFromMaps(entries []any, format Format, nameKey string) []NodeSpec {
 		}
 		typeName, _ := item["type"].(string)
 		typeName = strings.ToLower(strings.TrimSpace(typeName))
-		if typeName == "" || ignoredOutboundTypes[typeName] {
+		if typeName == "" || ignoredOutboundTypes[typeName] || !supportedProxyTypes[typeName] {
 			continue
 		}
 		tag, _ := item[nameKey].(string)
@@ -100,6 +175,110 @@ func nodesFromMaps(entries []any, format Format, nameKey string) []NodeSpec {
 		})
 	}
 	return nodes
+}
+
+func nodesFromClash(entries []any) []NodeSpec {
+	nodes := make([]NodeSpec, 0, len(entries))
+	for _, entry := range entries {
+		item, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		normalized, ok := normalizeClashNode(item)
+		if !ok {
+			continue
+		}
+		tag, _ := normalized["tag"].(string)
+		typeName, _ := normalized["type"].(string)
+		raw, _ := json.Marshal(normalized)
+		nodes = append(nodes, NodeSpec{ID: stableMapID(normalized), Tag: tag, Type: typeName, Format: FormatSingBox, Options: raw})
+	}
+	return nodes
+}
+
+func normalizeClashNode(input map[string]any) (map[string]any, bool) {
+	typeName := strings.ToLower(stringValue(input, "type"))
+	if !supportedProxyTypes[typeName] {
+		return nil, false
+	}
+	server := stringValue(input, "server")
+	port, ok := intValue(input["port"])
+	if server == "" || !ok || port < 1 || port > 65535 {
+		return nil, false
+	}
+	output := map[string]any{"type": typeName, "tag": stringValue(input, "name"), "server": server, "server_port": port}
+	if typeName == "http" {
+		copyString(output, input, "username")
+		copyString(output, input, "password")
+		if boolValue(input["tls"]) {
+			output["tls"] = clashTLS(input)
+		}
+		return output, true
+	}
+	uuid := stringValue(input, "uuid")
+	if uuid == "" {
+		return nil, false
+	}
+	output["uuid"] = uuid
+	copyString(output, input, "flow")
+	if boolValue(input["tls"]) || strings.EqualFold(stringValue(input, "security"), "tls") || stringValue(input, "reality-opts") != "" {
+		output["tls"] = clashTLS(input)
+	}
+	if transport := clashTransport(input); transport != nil {
+		output["transport"] = transport
+	}
+	return output, true
+}
+
+func clashTLS(input map[string]any) map[string]any {
+	tlsOptions := map[string]any{"enabled": true}
+	serverName := firstNonEmpty(stringValue(input, "servername"), stringValue(input, "sni"))
+	if serverName != "" {
+		tlsOptions["server_name"] = serverName
+	}
+	if boolValue(input["skip-cert-verify"]) {
+		tlsOptions["insecure"] = true
+	}
+	if fingerprint := stringValue(input, "client-fingerprint"); fingerprint != "" {
+		tlsOptions["utls"] = map[string]any{"enabled": true, "fingerprint": fingerprint}
+	}
+	if reality, ok := input["reality-opts"].(map[string]any); ok {
+		realityOptions := map[string]any{"enabled": true}
+		if key := stringValue(reality, "public-key"); key != "" {
+			realityOptions["public_key"] = key
+		}
+		if shortID := stringValue(reality, "short-id"); shortID != "" {
+			realityOptions["short_id"] = shortID
+		}
+		tlsOptions["reality"] = realityOptions
+	}
+	return tlsOptions
+}
+
+func clashTransport(input map[string]any) map[string]any {
+	switch strings.ToLower(stringValue(input, "network")) {
+	case "ws", "websocket":
+		transport := map[string]any{"type": "ws"}
+		if options, ok := input["ws-opts"].(map[string]any); ok {
+			copyString(transport, options, "path")
+			if headers, ok := options["headers"].(map[string]any); ok {
+				transport["headers"] = headers
+			}
+		}
+		return transport
+	case "grpc":
+		transport := map[string]any{"type": "grpc"}
+		if options, ok := input["grpc-opts"].(map[string]any); ok {
+			if value := firstNonEmpty(stringValue(options, "grpc-service-name"), stringValue(options, "service-name")); value != "" {
+				transport["service_name"] = value
+			}
+		}
+		return transport
+	case "http", "h2":
+		return map[string]any{"type": "http"}
+	default:
+		return nil
+	}
 }
 
 func stableMapID(input map[string]any) string {
@@ -140,6 +319,7 @@ func decodeBase64(text string) (string, bool) {
 
 func parseURIs(text string) ([]NodeSpec, error) {
 	var nodes []NodeSpec
+	unsupported := false
 	for _, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -149,22 +329,157 @@ func parseURIs(text string) ([]NodeSpec, error) {
 		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 			continue
 		}
-		tag := parsed.Fragment
-		parsed.Fragment = ""
-		canonical := parsed.String()
-		raw, _ := json.Marshal(canonical)
+		normalized, ok := normalizeURINode(parsed)
+		if !ok {
+			if scheme := strings.ToLower(parsed.Scheme); scheme != "vless" && scheme != "http" && scheme != "https" {
+				unsupported = true
+			}
+			continue
+		}
+		raw, _ := json.Marshal(normalized)
 		nodes = append(nodes, NodeSpec{
-			ID:      digest([]byte(canonical)),
-			Tag:     tag,
-			Type:    strings.ToLower(parsed.Scheme),
-			Format:  FormatURI,
+			ID:      stableMapID(normalized),
+			Tag:     parsed.Fragment,
+			Type:    strings.ToLower(stringValue(normalized, "type")),
+			Format:  FormatSingBox,
 			Options: raw,
 		})
 	}
+	if unsupported {
+		return nil, fmt.Errorf("subscription contains an unsupported proxy protocol")
+	}
 	if len(nodes) == 0 {
-		return nil, fmt.Errorf("subscription format is unsupported or contains no proxy nodes")
+		return nil, fmt.Errorf("subscription contains no supported proxy nodes")
 	}
 	return nodes, nil
+}
+
+func normalizeURINode(parsed *url.URL) (map[string]any, bool) {
+	scheme := strings.ToLower(parsed.Scheme)
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil || port < 1 || port > 65535 || parsed.Hostname() == "" {
+		return nil, false
+	}
+	if scheme == "http" || scheme == "https" {
+		output := map[string]any{"type": "http", "tag": parsed.Fragment, "server": parsed.Hostname(), "server_port": port}
+		if parsed.User != nil {
+			output["username"] = parsed.User.Username()
+			if password, ok := parsed.User.Password(); ok {
+				output["password"] = password
+			}
+		}
+		if scheme == "https" {
+			output["tls"] = map[string]any{"enabled": true, "server_name": parsed.Hostname()}
+		}
+		return output, true
+	}
+	if scheme != "vless" || parsed.User == nil || parsed.User.Username() == "" {
+		return nil, false
+	}
+	query := parsed.Query()
+	output := map[string]any{
+		"type": "vless", "tag": parsed.Fragment, "server": parsed.Hostname(), "server_port": port, "uuid": parsed.User.Username(),
+	}
+	if flow := query.Get("flow"); flow != "" {
+		output["flow"] = flow
+	}
+	security := strings.ToLower(query.Get("security"))
+	if security == "tls" || security == "reality" {
+		tlsOptions := map[string]any{"enabled": true}
+		if serverName := firstNonEmpty(query.Get("sni"), query.Get("servername"), query.Get("peer")); serverName != "" {
+			tlsOptions["server_name"] = serverName
+		}
+		if queryTruthy(query, "allowInsecure") || queryTruthy(query, "insecure") {
+			tlsOptions["insecure"] = true
+		}
+		if fingerprint := firstNonEmpty(query.Get("fp"), query.Get("fingerprint")); fingerprint != "" {
+			tlsOptions["utls"] = map[string]any{"enabled": true, "fingerprint": fingerprint}
+		}
+		if security == "reality" {
+			tlsOptions["reality"] = map[string]any{"enabled": true, "public_key": query.Get("pbk"), "short_id": query.Get("sid")}
+		}
+		output["tls"] = tlsOptions
+	}
+	if transport := uriTransport(query); transport != nil {
+		output["transport"] = transport
+	}
+	return output, true
+}
+
+func uriTransport(query url.Values) map[string]any {
+	switch strings.ToLower(query.Get("type")) {
+	case "ws", "websocket":
+		transport := map[string]any{"type": "ws"}
+		if path := query.Get("path"); path != "" {
+			transport["path"] = path
+		}
+		if host := query.Get("host"); host != "" {
+			transport["headers"] = map[string]any{"Host": host}
+		}
+		return transport
+	case "grpc":
+		transport := map[string]any{"type": "grpc"}
+		if serviceName := firstNonEmpty(query.Get("serviceName"), query.Get("service_name")); serviceName != "" {
+			transport["service_name"] = serviceName
+		}
+		return transport
+	case "http", "h2":
+		return map[string]any{"type": "http"}
+	default:
+		return nil
+	}
+}
+
+func stringValue(input map[string]any, key string) string {
+	value, _ := input[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func intValue(value any) (int, bool) {
+	switch number := value.(type) {
+	case int:
+		return number, true
+	case int64:
+		return int(number), true
+	case float64:
+		return int(number), number == float64(int(number))
+	case string:
+		parsed, err := strconv.Atoi(number)
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func boolValue(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		return strings.EqualFold(typed, "true") || typed == "1"
+	default:
+		return false
+	}
+}
+
+func copyString(destination, source map[string]any, key string) {
+	if value := stringValue(source, key); value != "" {
+		destination[key] = value
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func queryTruthy(query url.Values, key string) bool {
+	value := query.Get(key)
+	return value == "1" || strings.EqualFold(value, "true")
 }
 
 func digest(value []byte) string {

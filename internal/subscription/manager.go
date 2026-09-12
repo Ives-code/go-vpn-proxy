@@ -34,10 +34,8 @@ func (manager *Manager) Refresh(ctx context.Context) (Snapshot, error) {
 	manager.refreshMu.Lock()
 	defer manager.refreshMu.Unlock()
 
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-
 	sourceErrors := make(map[string]string)
+	updates := make(map[string][]NodeSpec)
 	for _, source := range manager.sources {
 		body, hint, err := manager.fetcher.Fetch(ctx, source)
 		if err != nil {
@@ -55,14 +53,19 @@ func (manager *Manager) Refresh(ctx context.Context) (Snapshot, error) {
 		for index := range nodes {
 			nodes[index].SourceIDs = []string{source.ID}
 		}
-		manager.bySource[source.ID] = nodes
+		updates[source.ID] = nodes
 	}
 
+	manager.mu.Lock()
+	for sourceID, nodes := range updates {
+		manager.bySource[sourceID] = nodes
+	}
 	manager.last = Snapshot{
 		Nodes:        mergeSources(manager.bySource),
 		SourceErrors: sourceErrors,
 	}
 	result := cloneSnapshot(manager.last)
+	manager.mu.Unlock()
 	if len(sourceErrors) > 0 {
 		ids := make([]string, 0, len(sourceErrors))
 		for id := range sourceErrors {

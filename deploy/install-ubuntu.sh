@@ -30,6 +30,20 @@ environment_source="${3:-}"
 [[ -f "${config_source}" ]] || die "config path is required"
 [[ -f "${environment_source}" ]] || die "environment file path is required"
 
+validated_lan_cidr=""
+if [[ -n "${LAN_CIDR:-}" ]]; then
+  command -v python3 >/dev/null 2>&1 || die "python3 is required to validate LAN_CIDR"
+  python3 - "${LAN_CIDR}" <<'PY'
+import ipaddress
+import sys
+
+network = ipaddress.ip_network(sys.argv[1], strict=False)
+if network.prefixlen == 0:
+    raise SystemExit("LAN_CIDR cannot allow the entire internet")
+PY
+  validated_lan_cidr="${LAN_CIDR}"
+fi
+
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 service_source="${script_dir}/${APP_NAME}.service"
 [[ -f "${service_source}" ]] || die "service template is missing"
@@ -44,23 +58,27 @@ install -o root -g "${APP_USER}" -m 0640 "${config_source}" "${CONFIG_DIR}/confi
 install -m 0600 -o root -g root "${environment_source}" "${CONFIG_DIR}/gateway.env"
 install -o root -g root -m 0644 "${service_source}" "${SERVICE_DEST}"
 
+firewall_applied=0
+rollback_firewall() {
+  if [[ "${firewall_applied}" -eq 1 ]] && command -v ufw >/dev/null 2>&1; then
+    ufw --force delete allow from "${validated_lan_cidr}" to any port 18080 proto tcp >/dev/null 2>&1 || true
+    ufw --force delete allow from "${validated_lan_cidr}" to any port 18081 proto tcp >/dev/null 2>&1 || true
+    rm -f -- "${STATE_DIR}/ufw-cidr"
+  fi
+}
+trap rollback_firewall ERR
+
+if [[ -n "${validated_lan_cidr}" ]] && command -v ufw >/dev/null 2>&1 && LC_ALL=C ufw status | grep -q '^Status: active$'; then
+  ufw allow from "${validated_lan_cidr}" to any port 18080 proto tcp comment "${APP_NAME}"
+  ufw allow from "${validated_lan_cidr}" to any port 18081 proto tcp comment "${APP_NAME}"
+  printf '%s\n' "${validated_lan_cidr}" >"${STATE_DIR}/ufw-cidr"
+  chown root:root "${STATE_DIR}/ufw-cidr"
+  chmod 0600 "${STATE_DIR}/ufw-cidr"
+  firewall_applied=1
+fi
+
 systemctl daemon-reload
 systemctl enable --now "${APP_NAME}.service"
-
-if [[ -n "${LAN_CIDR:-}" ]]; then
-  command -v python3 >/dev/null 2>&1 || die "python3 is required to validate LAN_CIDR"
-  python3 - "${LAN_CIDR}" <<'PY'
-import ipaddress
-import sys
-
-network = ipaddress.ip_network(sys.argv[1], strict=False)
-if network.prefixlen == 0:
-    raise SystemExit("LAN_CIDR cannot allow the entire internet")
-PY
-  if command -v ufw >/dev/null 2>&1 && LC_ALL=C ufw status | grep -q '^Status: active$'; then
-    ufw allow from "${LAN_CIDR}" to any port 18080 proto tcp
-    ufw allow from "${LAN_CIDR}" to any port 18081 proto tcp
-  fi
-fi
+trap - ERR
 
 printf '[%s] installed; inspect with: systemctl status %s\n' "${APP_NAME}" "${APP_NAME}"

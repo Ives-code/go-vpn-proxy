@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
 
 type scriptedFetcher struct {
@@ -16,6 +17,17 @@ type scriptedFetcher struct {
 type fetchResult struct {
 	body []byte
 	err  error
+}
+
+type blockingFetcher struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (fetcher *blockingFetcher) Fetch(context.Context, Source) ([]byte, string, error) {
+	close(fetcher.started)
+	<-fetcher.release
+	return []byte("vless://one@one.invalid:443\n"), "", nil
 }
 
 func (fetcher *scriptedFetcher) Fetch(_ context.Context, source Source) ([]byte, string, error) {
@@ -37,7 +49,7 @@ func TestRefreshRetainsFailedSourceSnapshot(t *testing.T) {
 			{body: []byte("vless://one-new@one.invalid:443\n")},
 		},
 		"2": {
-			{body: []byte("trojan://two@two.invalid:443\n")},
+			{body: []byte("http://two:password@two.invalid:8080\n")},
 			{err: errors.New("HTTP 503")},
 		},
 	}}
@@ -93,4 +105,30 @@ func TestRefreshDeduplicatesNodesAcrossSources(t *testing.T) {
 	if got := snapshot.Nodes[0].SourceIDs; len(got) != 2 || got[0] != "1" || got[1] != "2" {
 		t.Fatalf("SourceIDs = %#v", got)
 	}
+}
+
+func TestSnapshotRemainsResponsiveDuringNetworkFetch(t *testing.T) {
+	fetcher := &blockingFetcher{started: make(chan struct{}), release: make(chan struct{})}
+	manager := NewManager([]Source{{ID: "1", URL: "https://one.invalid"}}, fetcher)
+	refreshDone := make(chan struct{})
+	go func() {
+		_, _ = manager.Refresh(context.Background())
+		close(refreshDone)
+	}()
+	<-fetcher.started
+
+	snapshotDone := make(chan struct{})
+	go func() {
+		_ = manager.Snapshot()
+		close(snapshotDone)
+	}()
+	select {
+	case <-snapshotDone:
+	case <-time.After(100 * time.Millisecond):
+		close(fetcher.release)
+		<-refreshDone
+		t.Fatal("Snapshot blocked behind network fetch")
+	}
+	close(fetcher.release)
+	<-refreshDone
 }

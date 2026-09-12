@@ -1,0 +1,9 @@
+http_listen: 0.0.0.0:18080
+ws_listen: 0.0.0.0:18081
+admin_listen: 127.0.0.1:19090
+refresh_interval: 30m
+probe_interval: 30s
+dial_timeout: 10s
+shutdown_drain: 30s
+max_subscription_size: "4194304"
+probe_url: https://cp.cloudflare.com/generate_204

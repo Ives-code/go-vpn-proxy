@@ -81,9 +81,12 @@ be permanently deleted.
 
 ## Docker
 
-Copy `docker-compose.example.yml` to `docker-compose.yml`, create `.env`,
-`config.yaml`, and `state/`, then run `docker compose up -d --build`. Do not
-publish port `19090` beyond loopback.
+Copy `docker-compose.example.yml` to `docker-compose.yml`, copy
+`config.container.example.yaml` to `config.container.yaml`, create `.env` and
+`state/`, then run `docker compose up -d --build`. The container example does
+not publish the loopback-only admin port; inspect it from inside the container
+namespace or use the native systemd deployment when host-side status access is
+required.
 
 ## Known behavior
 

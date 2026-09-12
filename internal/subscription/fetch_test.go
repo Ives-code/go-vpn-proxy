@@ -2,6 +2,7 @@ package subscription
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -67,5 +68,45 @@ func TestHTTPFetcherErrorDoesNotContainSubscriptionURL(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "subscription.invalid") || strings.Contains(err.Error(), "do-not-leak") {
 		t.Fatalf("fetch error leaked subscription URL: %q", err)
+	}
+}
+
+func TestHTTPFetcherDoesNotLeakSubscriptionURLInRedirectReferer(t *testing.T) {
+	referer := make(chan string, 1)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/start" {
+			http.Redirect(response, request, "/final", http.StatusFound)
+			return
+		}
+		referer <- request.Header.Get("Referer")
+		_, _ = response.Write([]byte(`{"outbounds":[]}`))
+	}))
+	defer server.Close()
+
+	fetcher := NewHTTPFetcher(server.Client(), 1024)
+	_, _, err := fetcher.Fetch(context.Background(), Source{ID: "1", URL: server.URL + "/start?token=do-not-leak"})
+	if err != nil {
+		t.Fatalf("Fetch returned error: %v", err)
+	}
+	if got := <-referer; got != "" {
+		t.Fatalf("redirect leaked Referer %q", got)
+	}
+}
+
+func TestHTTPFetcherRejectsCrossOriginRedirect(t *testing.T) {
+	destination := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`{"outbounds":[]}`))
+	}))
+	defer destination.Close()
+	source := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		http.Redirect(response, request, destination.URL, http.StatusFound)
+	}))
+	defer source.Close()
+
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}} // test servers use unrelated ephemeral roots
+	fetcher := NewHTTPFetcher(client, 1024)
+	_, _, err := fetcher.Fetch(context.Background(), Source{ID: "1", URL: source.URL + "/?token=do-not-leak"})
+	if err == nil || !strings.Contains(err.Error(), "fetch failed") {
+		t.Fatalf("expected cross-origin redirect error, got %v", err)
 	}
 }

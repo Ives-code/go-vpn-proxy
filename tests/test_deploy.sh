@@ -5,7 +5,9 @@ root_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${root_dir}"
 
 required_files=(
+  .dockerignore
   Dockerfile
+  config.container.example.yaml
   docker-compose.example.yml
   deploy/install-ubuntu.sh
   deploy/uninstall-ubuntu.sh
@@ -16,6 +18,13 @@ required_files=(
 for file in "${required_files[@]}"; do
   [[ -f "${file}" ]] || {
     printf 'FAIL: missing %s\n' "${file}" >&2
+    exit 1
+  }
+done
+
+for ignored in '.env' 'config.yaml' 'config.container.yaml' '.git' 'state' 'bin'; do
+  grep -Fxq -- "${ignored}" .dockerignore || {
+    printf 'FAIL: .dockerignore must exclude %s\n' "${ignored}" >&2
     exit 1
   }
 done
@@ -45,6 +54,16 @@ grep -Fq 'LAN_CIDR' deploy/install-ubuntu.sh || {
   printf 'FAIL: installer must require an explicit LAN CIDR for UFW\n' >&2
   exit 1
 }
+validation_line="$(grep -n 'ipaddress.ip_network' deploy/install-ubuntu.sh | head -1 | cut -d: -f1)"
+start_line="$(grep -n 'systemctl enable --now' deploy/install-ubuntu.sh | head -1 | cut -d: -f1)"
+[[ -n "${validation_line}" && -n "${start_line}" && "${validation_line}" -lt "${start_line}" ]] || {
+  printf 'FAIL: LAN_CIDR must be validated before the service starts\n' >&2
+  exit 1
+}
+grep -Fq 'ufw --force delete allow from' deploy/uninstall-ubuntu.sh || {
+  printf 'FAIL: uninstaller must remove the exact UFW rules created by install\n' >&2
+  exit 1
+}
 if grep -Eq 'ufw allow[[:space:]]+[0-9]+/tcp' deploy/install-ubuntu.sh; then
   printf 'FAIL: installer contains an unscoped UFW allow rule\n' >&2
   exit 1
@@ -53,6 +72,10 @@ grep -Eq '^USER[[:space:]]+[0-9]+' Dockerfile || {
   printf 'FAIL: runtime container must use a numeric non-root user\n' >&2
   exit 1
 }
+if grep -Fq 'COPY . .' Dockerfile; then
+  printf 'FAIL: Dockerfile must copy only build-required source directories\n' >&2
+  exit 1
+fi
 
 if git grep -nE 'OGJj|e72cd6|subscribe\.php\?key=|get\.sushi2\.cloud/sushi/' \
   -- '*.go' '*.yaml' '*.yml' '*.sh' 'Dockerfile' ':!tests/test_deploy.sh'; then

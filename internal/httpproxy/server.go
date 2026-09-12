@@ -69,7 +69,28 @@ func (server *Server) Serve(listener net.Listener) error {
 }
 
 func (server *Server) Shutdown(ctx context.Context) error {
-	return server.http.Shutdown(ctx)
+	shutdownErr := server.http.Shutdown(ctx)
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for server.ActiveConnections() > 0 {
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			server.sessions.Range(func(_, value any) bool {
+				_ = value.(*connectionSession).client.Close()
+				return true
+			})
+			forceDeadline := time.Now().Add(time.Second)
+			for server.ActiveConnections() > 0 && time.Now().Before(forceDeadline) {
+				time.Sleep(time.Millisecond)
+			}
+			if shutdownErr != nil {
+				return shutdownErr
+			}
+			return ctx.Err()
+		}
+	}
+	return shutdownErr
 }
 
 func (server *Server) ActiveConnections() int64 {
@@ -120,6 +141,8 @@ func (session *connectionSession) dial(ctx context.Context, network, address str
 	for {
 		id, ok := attempt.Next()
 		if !ok {
+			attempt.Abort()
+			session.server.logger.Error("all proxy nodes failed", "listener", session.server.name, "candidate_count", len(candidates))
 			return nil, errors.New("all proxy nodes failed")
 		}
 		lease, ok := session.server.registry.Acquire(id, halfOpen[id])
@@ -135,6 +158,7 @@ func (session *connectionSession) dial(ctx context.Context, network, address str
 		cancel()
 		if err != nil {
 			session.server.registry.MarkFailure(id, err)
+			session.server.logger.Warn("proxy node dial failed", "listener", session.server.name, "node_id", id)
 			_ = lease.Close()
 			continue
 		}

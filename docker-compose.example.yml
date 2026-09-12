@@ -8,9 +8,8 @@ services:
     ports:
       - "18080:18080"
       - "18081:18081"
-      - "127.0.0.1:19090:19090"
     volumes:
-      - ./config.yaml:/etc/dual-egress-gateway/config.yaml:ro
+      - ./config.container.yaml:/etc/dual-egress-gateway/config.yaml:ro
       - ./state:/var/lib/dual-egress-gateway
     read_only: true
     tmpfs:

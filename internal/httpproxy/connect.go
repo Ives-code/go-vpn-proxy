@@ -56,27 +56,28 @@ func (server *Server) handleConnect(response http.ResponseWriter, request *http.
 }
 
 func tunnel(ctx context.Context, client net.Conn, upstream net.Conn) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
 	var wait sync.WaitGroup
 	wait.Add(2)
 	copyOneWay := func(destination net.Conn, source io.Reader) {
 		defer wait.Done()
 		_, _ = io.Copy(destination, source)
-		if tcp, ok := destination.(*net.TCPConn); ok {
-			_ = tcp.CloseWrite()
+		if closeWriter, ok := destination.(interface{ CloseWrite() error }); ok {
+			_ = closeWriter.CloseWrite()
 		}
-		cancel()
 	}
 	go copyOneWay(upstream, client)
 	go copyOneWay(client, upstream)
+	stopWatcher := make(chan struct{})
 	go func() {
-		<-ctx.Done()
-		_ = client.SetDeadline(timeNow())
-		_ = upstream.SetDeadline(timeNow())
+		select {
+		case <-ctx.Done():
+			_ = client.SetDeadline(timeNow())
+			_ = upstream.SetDeadline(timeNow())
+		case <-stopWatcher:
+		}
 	}()
 	wait.Wait()
+	close(stopWatcher)
 }
 
 var timeNow = func() time.Time { return time.Now() }

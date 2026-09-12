@@ -63,3 +63,35 @@ func TestAttemptReturnsEachEligibleNodeOnce(t *testing.T) {
 		t.Fatalf("attempt order = %#v", got)
 	}
 }
+
+func TestConcurrentAttemptsDoNotRegressCursor(t *testing.T) {
+	selector := NewSelector()
+	candidates := []Candidate{{ID: "a", Eligible: true}, {ID: "b", Eligible: true}, {ID: "c", Eligible: true}}
+	first := selector.Begin(candidates)
+	second := selector.Begin(candidates)
+	firstID, _ := first.Next()
+	secondID, _ := second.Next()
+	if firstID != "a" || secondID != "b" {
+		t.Fatalf("reserved starts = %q, %q", firstID, secondID)
+	}
+	first.Commit(firstID)
+	second.Commit(secondID)
+	if got := nextID(t, selector, candidates); got != "c" {
+		t.Fatalf("next candidate after concurrent commits = %q", got)
+	}
+}
+
+func TestUncontendedAllFailedAttemptRollsBackReservation(t *testing.T) {
+	selector := NewSelector()
+	candidates := []Candidate{{ID: "a", Eligible: true}, {ID: "b", Eligible: true}}
+	attempt := selector.Begin(candidates)
+	for {
+		if _, ok := attempt.Next(); !ok {
+			break
+		}
+	}
+	attempt.Abort()
+	if got := nextID(t, selector, candidates); got != "a" {
+		t.Fatalf("next candidate after all-failed rollback = %q", got)
+	}
+}

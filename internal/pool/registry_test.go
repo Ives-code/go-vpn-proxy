@@ -98,6 +98,10 @@ func TestAllDownHalfOpenIsBounded(t *testing.T) {
 	if _, ok := registry.Acquire("a", true); ok {
 		t.Fatal("second concurrent half-open acquire succeeded")
 	}
+	registry.MarkFailure("a", context.DeadlineExceeded)
+	if _, ok := registry.Acquire("a", true); ok {
+		t.Fatal("MarkFailure reopened half-open gate before lease close")
+	}
 	if err := first.Close(); err != nil {
 		t.Fatalf("close half-open lease: %v", err)
 	}
@@ -121,4 +125,14 @@ func TestStatsReflectHealthAndActiveLeases(t *testing.T) {
 	if stats.Total != 2 || stats.Healthy != 1 || stats.Unhealthy != 1 || stats.ActiveLeases != 1 {
 		t.Fatalf("stats = %#v", stats)
 	}
+}
+
+func TestHealthyNodeBecomesDueForPeriodicProbe(t *testing.T) {
+	registry, _ := healthyRegistry(t, "a")
+	leases := registry.ProbeDue(time.Now().Add(31 * time.Second))
+	if len(leases) != 1 || leases[0].ID != "a" {
+		t.Fatalf("periodic probe leases = %#v", leases)
+	}
+	registry.MarkSuccess("a", time.Millisecond)
+	_ = leases[0].Close()
 }

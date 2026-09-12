@@ -96,6 +96,31 @@ func TestEngineBuildsHTTPOutboundDialer(t *testing.T) {
 	}
 }
 
+func TestNormalizedVLESSURIAndClashNodesBuild(t *testing.T) {
+	inputs := map[string][]byte{
+		"uri":   []byte("vless://00000000-0000-0000-0000-000000000001@edge.invalid:443?security=tls&type=ws&path=%2Fsocket&sni=edge.invalid#node\n"),
+		"clash": []byte("proxies:\n  - name: node\n    type: vless\n    server: edge.invalid\n    port: 443\n    uuid: 00000000-0000-0000-0000-000000000001\n    tls: true\n    servername: edge.invalid\n    network: ws\n    ws-opts:\n      path: /socket\n"),
+	}
+	for name, body := range inputs {
+		t.Run(name, func(t *testing.T) {
+			nodes, err := subscription.Parse(body, "")
+			if err != nil || len(nodes) != 1 {
+				t.Fatalf("Parse nodes=%d err=%v", len(nodes), err)
+			}
+			engine, err := NewEngine(context.Background())
+			if err != nil {
+				t.Fatalf("NewEngine: %v", err)
+			}
+			defer engine.Close()
+			dialer, err := engine.Build(nodes[0])
+			if err != nil {
+				t.Fatalf("Build normalized node: %v", err)
+			}
+			_ = dialer.Close()
+		})
+	}
+}
+
 func serveOneEcho(listener net.Listener) {
 	conn, err := listener.Accept()
 	if err != nil {

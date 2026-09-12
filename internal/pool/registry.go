@@ -148,7 +148,6 @@ func (registry *Registry) MarkFailure(id string, cause error) {
 		return
 	}
 	state.healthy = false
-	state.probing = false
 	state.nextProbe = time.Now().Add(registry.probeInterval)
 	if cause != nil {
 		state.lastFailure = failureClass(cause)
@@ -163,10 +162,9 @@ func (registry *Registry) MarkSuccess(id string, latency time.Duration) {
 		return
 	}
 	state.healthy = true
-	state.probing = false
 	state.latency = latency
 	state.lastFailure = ""
-	state.nextProbe = time.Time{}
+	state.nextProbe = time.Now().Add(registry.probeInterval)
 }
 
 func (registry *Registry) RoutingSnapshot() []Candidate {
@@ -214,7 +212,7 @@ func (registry *Registry) Acquire(id string, allowUnhealthy bool) (*NodeLease, b
 		state.probing = true
 	}
 	state.active++
-	return &NodeLease{ID: id, Dialer: state.dialer, registry: registry, halfOpen: halfOpen}, true
+	return &NodeLease{ID: id, Dialer: state.dialer, registry: registry, gated: halfOpen}, true
 }
 
 func (registry *Registry) ProbeDue(now time.Time) []*NodeLease {
@@ -223,12 +221,12 @@ func (registry *Registry) ProbeDue(now time.Time) []*NodeLease {
 	var leases []*NodeLease
 	for _, id := range registry.order {
 		state := registry.nodes[id]
-		if state == nil || state.removed || state.probing || state.healthy || state.nextProbe.After(now) {
+		if state == nil || state.removed || state.probing || state.nextProbe.After(now) {
 			continue
 		}
 		state.probing = true
 		state.active++
-		leases = append(leases, &NodeLease{ID: id, Dialer: state.dialer, registry: registry, halfOpen: true})
+		leases = append(leases, &NodeLease{ID: id, Dialer: state.dialer, registry: registry, gated: true})
 	}
 	return leases
 }
@@ -260,18 +258,18 @@ type NodeLease struct {
 	ID       string
 	Dialer   Dialer
 	registry *Registry
-	halfOpen bool
+	gated    bool
 	once     sync.Once
 }
 
 func (lease *NodeLease) Close() error {
 	lease.once.Do(func() {
-		lease.registry.release(lease.ID, lease.halfOpen)
+		lease.registry.release(lease.ID, lease.gated)
 	})
 	return nil
 }
 
-func (registry *Registry) release(id string, halfOpen bool) {
+func (registry *Registry) release(id string, gated bool) {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 	state, ok := registry.nodes[id]
@@ -281,7 +279,7 @@ func (registry *Registry) release(id string, halfOpen bool) {
 	if state.active > 0 {
 		state.active--
 	}
-	if halfOpen {
+	if gated {
 		state.probing = false
 	}
 	if state.removed && state.active == 0 {

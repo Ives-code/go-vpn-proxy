@@ -38,7 +38,6 @@ var nonProxyTypes = map[string]bool{
 
 type Engine struct {
 	mu      sync.Mutex
-	ctx     context.Context
 	boxCtx  context.Context
 	box     *box.Box
 	logger  log.ContextLogger
@@ -64,7 +63,6 @@ func NewEngine(ctx context.Context) (*Engine, error) {
 	}
 	factory := log.NewNOPFactory()
 	return &Engine{
-		ctx:     ctx,
 		boxCtx:  boxCtx,
 		box:     instance,
 		logger:  factory.NewLogger("dynamic-outbound"),
@@ -127,7 +125,7 @@ func (engine *Engine) Build(spec subscription.NodeSpec) (pool.Dialer, error) {
 		return nil, fmt.Errorf("outbound %s already exists", previousID)
 	}
 	if err := engine.box.Outbound().Create(
-		engine.ctx,
+		engine.boxCtx,
 		engine.box.Router(),
 		engine.logger,
 		tag,
