@@ -56,8 +56,14 @@ func New(cfg config.Config, logger *slog.Logger) (*App, error) {
 	for index, sourceURL := range cfg.SubscriptionURLs {
 		sources = append(sources, subscription.Source{ID: fmt.Sprintf("%d", index+1), URL: sourceURL})
 	}
-	fetcher := subscription.NewHTTPFetcher(&http.Client{Timeout: 30 * time.Second}, cfg.MaxSubscriptionSize)
+	fetcher := subscription.NewHTTPFetcher(&http.Client{Timeout: 30 * time.Second}, cfg.MaxSubscriptionSize, cfg.HTTPSubscriptionAllowlist...)
 	manager := subscription.NewManager(sources, fetcher)
+	if cfg.SubscriptionSeedFile != "" {
+		if err := manager.LoadSeed(cfg.SubscriptionSeedFile, cfg.MaxSubscriptionSize); err != nil {
+			_ = engine.Close()
+			return nil, err
+		}
+	}
 	prober, err := proxycore.NewProber(cfg.ProbeURL, http.StatusNoContent, &tls.Config{MinVersion: tls.VersionTLS12})
 	if err != nil {
 		_ = engine.Close()

@@ -23,34 +23,37 @@ func (Secret) GoString() string { return redacted }
 func (secret Secret) Reveal() string { return string(secret) }
 
 type Config struct {
-	HTTPListen          string
-	WSListen            string
-	AdminListen         string
-	Username            Secret
-	Password            Secret
-	AdminToken          Secret
-	PushBaseURL         Secret
-	SubscriptionURLs    []string
-	LowNodeThreshold    int
-	RefreshInterval     time.Duration
-	ProbeInterval       time.Duration
-	DialTimeout         time.Duration
-	ShutdownDrain       time.Duration
-	MaxSubscriptionSize int64
-	ProbeURL            string
+	HTTPListen                string
+	WSListen                  string
+	AdminListen               string
+	Username                  Secret
+	Password                  Secret
+	AdminToken                Secret
+	PushBaseURL               Secret
+	SubscriptionSeedFile      string
+	SubscriptionURLs          []string
+	HTTPSubscriptionAllowlist []string
+	LowNodeThreshold          int
+	RefreshInterval           time.Duration
+	ProbeInterval             time.Duration
+	DialTimeout               time.Duration
+	ShutdownDrain             time.Duration
+	MaxSubscriptionSize       int64
+	ProbeURL                  string
 }
 
 type fileConfig struct {
-	HTTPListen          string `yaml:"http_listen"`
-	WSListen            string `yaml:"ws_listen"`
-	AdminListen         string `yaml:"admin_listen"`
-	RefreshInterval     string `yaml:"refresh_interval"`
-	ProbeInterval       string `yaml:"probe_interval"`
-	DialTimeout         string `yaml:"dial_timeout"`
-	ShutdownDrain       string `yaml:"shutdown_drain"`
-	MaxSubscriptionSize string `yaml:"max_subscription_size"`
-	ProbeURL            string `yaml:"probe_url"`
-	LowNodeThreshold    int    `yaml:"low_node_threshold"`
+	HTTPListen           string `yaml:"http_listen"`
+	WSListen             string `yaml:"ws_listen"`
+	AdminListen          string `yaml:"admin_listen"`
+	RefreshInterval      string `yaml:"refresh_interval"`
+	ProbeInterval        string `yaml:"probe_interval"`
+	DialTimeout          string `yaml:"dial_timeout"`
+	ShutdownDrain        string `yaml:"shutdown_drain"`
+	MaxSubscriptionSize  string `yaml:"max_subscription_size"`
+	ProbeURL             string `yaml:"probe_url"`
+	LowNodeThreshold     int    `yaml:"low_node_threshold"`
+	SubscriptionSeedFile string `yaml:"subscription_seed_file"`
 }
 
 func Load(path string, lookupEnv func(string) (string, bool)) (Config, error) {
@@ -65,16 +68,17 @@ func Load(path string, lookupEnv func(string) (string, bool)) (Config, error) {
 	}
 
 	cfg := Config{
-		HTTPListen:          defaultString(file.HTTPListen, "127.0.0.1:18080"),
-		WSListen:            defaultString(file.WSListen, "127.0.0.1:18081"),
-		AdminListen:         defaultString(file.AdminListen, "127.0.0.1:19090"),
-		RefreshInterval:     30 * time.Minute,
-		ProbeInterval:       30 * time.Second,
-		DialTimeout:         10 * time.Second,
-		ShutdownDrain:       30 * time.Second,
-		MaxSubscriptionSize: 4 << 20,
-		ProbeURL:            defaultString(file.ProbeURL, "https://cp.cloudflare.com/generate_204"),
-		LowNodeThreshold:    30,
+		SubscriptionSeedFile: strings.TrimSpace(file.SubscriptionSeedFile),
+		HTTPListen:           defaultString(file.HTTPListen, "127.0.0.1:18080"),
+		WSListen:             defaultString(file.WSListen, "127.0.0.1:18081"),
+		AdminListen:          defaultString(file.AdminListen, "127.0.0.1:19090"),
+		RefreshInterval:      30 * time.Minute,
+		ProbeInterval:        30 * time.Second,
+		DialTimeout:          10 * time.Second,
+		ShutdownDrain:        30 * time.Second,
+		MaxSubscriptionSize:  4 << 20,
+		ProbeURL:             defaultString(file.ProbeURL, "https://cp.cloudflare.com/generate_204"),
+		LowNodeThreshold:     30,
 	}
 	if file.LowNodeThreshold != 0 {
 		if file.LowNodeThreshold < 1 {
@@ -141,6 +145,21 @@ func Load(path string, lookupEnv func(string) (string, bool)) (Config, error) {
 		cfg.PushBaseURL = Secret(value)
 	}
 
+	allowedHTTP := make(map[string]bool)
+	if value, exists := lookupEnv("HTTP_SUBSCRIPTION_ALLOWLIST"); exists {
+		for _, raw := range strings.Split(value, "\n") {
+			value := strings.TrimSpace(raw)
+			if value == "" {
+				continue
+			}
+			u, err := url.Parse(value)
+			if err != nil || u.Scheme != "http" || u.Host == "" || u.User != nil || u.Fragment != "" {
+				return Config{}, errors.New("HTTP_SUBSCRIPTION_ALLOWLIST must contain explicit HTTP URLs")
+			}
+			allowedHTTP[value] = true
+			cfg.HTTPSubscriptionAllowlist = append(cfg.HTTPSubscriptionAllowlist, value)
+		}
+	}
 	urlsValue, ok := lookupEnv("SUBSCRIPTION_URLS")
 	if !ok || strings.TrimSpace(urlsValue) == "" {
 		return Config{}, errors.New("SUBSCRIPTION_URLS is required")
@@ -151,7 +170,7 @@ func Load(path string, lookupEnv func(string) (string, bool)) (Config, error) {
 			continue
 		}
 		parsed, parseErr := url.Parse(trimmed)
-		if parseErr != nil || parsed.Scheme != "https" || parsed.Host == "" {
+		if parseErr != nil || (parsed.Scheme != "https" && !(parsed.Scheme == "http" && allowedHTTP[trimmed])) || parsed.Host == "" {
 			return Config{}, errors.New("every SUBSCRIPTION_URLS entry must be an absolute HTTPS URL")
 		}
 		cfg.SubscriptionURLs = append(cfg.SubscriptionURLs, trimmed)

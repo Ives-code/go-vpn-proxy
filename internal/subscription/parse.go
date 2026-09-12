@@ -21,7 +21,7 @@ var ignoredOutboundTypes = map[string]bool{
 }
 
 var supportedRuntimeTypes = map[string]bool{
-	"anytls": true, "http": true, "hysteria2": true, "trojan": true, "vless": true,
+	"anytls": true, "http": true, "hysteria2": true, "trojan": true, "vless": true, "shadowsocks": true,
 }
 
 var supportedNormalizedTypes = map[string]bool{"http": true, "vless": true, "anytls": true}

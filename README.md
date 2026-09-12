@@ -13,6 +13,12 @@ shared as unhealthy by both listeners, and return after a successful probe.
 
 ## Configuration
 
+HTTPS is required by default. An operator can explicitly permit individual HTTP
+subscription URLs by listing their exact URLs in the private environment variable
+`HTTP_SUBSCRIPTION_ALLOWLIST` (newline-separated). Other HTTP URLs remain rejected,
+and redirects must retain the original scheme and host. HTTP subscription traffic
+is unencrypted; use this exception only for intentionally configured sources.
+
 Copy `config.example.yaml` to `config.yaml` and `.env.example` to `.env`.
 Real subscription URLs and credentials belong only in `.env`, which is ignored
 by Git. `SUBSCRIPTION_URLS` is newline-separated; quote a multi-line value in
@@ -109,6 +115,16 @@ required.
 
 ## 中文告警配置
 
+### 手工导入备用订阅快照
+
+可设置 YAML `subscription_seed_file: /etc/dual-egress-gateway/subscription-seed.json`。
+文件为 JSON 数组，每项包含 `source_sha256`（原订阅 URL 的 SHA-256 十六进制）、
+`body`（订阅文本）、`hint`（格式提示）、`expires_at`（RFC3339 到期时间）。
+文件必须为普通私密文件，不允许其他用户读取；内容包含节点凭据，不可提交到 Git。
+启动时会校验并作为缓存加载。网络刷新失败继续使用缓存，刷新成功则在内存中
+替换；原 URL、来源编号和失败提醒保留。此手工快照不会自动写回更新，重启仍
+从该文件恢复，因此需按需重新导入。健康状态由服务器重新探测。
+
 在私密环境文件设置 `PUSH_BASE_URL` 为推送服务的地址前缀（包含设备令牌，
 不包含标题和正文）。留空则关闭提醒。支持 HTTP/HTTPS；HTTP 地址会以明文
 传输推送令牌和消息，服务支持 HTTPS 时建议使用 HTTPS。
@@ -127,7 +143,7 @@ required.
 - Clash YAML AnyTLS subscriptions are supported, including TLS/SNI, client
   fingerprint and non-negative session-pool settings (intervals are seconds).
 
-- The first release enables VLESS, AnyTLS, Hysteria2, and Trojan subscription
+- The runtime enables VLESS, AnyTLS, Hysteria2, Trojan, and sing-box JSON Shadowsocks subscription
   nodes plus HTTP upstream proxies;
   unsupported node protocols are rejected explicitly instead of being loaded
   through unused sing-box protocol modules.

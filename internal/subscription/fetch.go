@@ -13,11 +13,16 @@ import (
 )
 
 type HTTPFetcher struct {
-	client   *http.Client
-	maxBytes int64
+	client      *http.Client
+	maxBytes    int64
+	allowedHTTP map[string]bool
 }
 
-func NewHTTPFetcher(client *http.Client, maxBytes int64) *HTTPFetcher {
+func NewHTTPFetcher(client *http.Client, maxBytes int64, httpAllowlist ...string) *HTTPFetcher {
+	allowed := make(map[string]bool, len(httpAllowlist))
+	for _, value := range httpAllowlist {
+		allowed[value] = true
+	}
 	if client == nil {
 		client = http.DefaultClient
 	}
@@ -25,7 +30,7 @@ func NewHTTPFetcher(client *http.Client, maxBytes int64) *HTTPFetcher {
 	checkedClient.Jar = nil
 	previousRedirect := checkedClient.CheckRedirect
 	checkedClient.CheckRedirect = func(request *http.Request, via []*http.Request) error {
-		if request.URL.Scheme != "https" {
+		if request.URL.Scheme != "https" && !(request.URL.Scheme == "http" && len(via) > 0 && allowed[via[0].URL.String()]) {
 			return errors.New("subscription redirect must use HTTPS")
 		}
 		if len(via) > 0 && (request.URL.Scheme != via[0].URL.Scheme || request.URL.Host != via[0].URL.Host) {
@@ -43,7 +48,7 @@ func NewHTTPFetcher(client *http.Client, maxBytes int64) *HTTPFetcher {
 		}
 		return nil
 	}
-	return &HTTPFetcher{client: &checkedClient, maxBytes: maxBytes}
+	return &HTTPFetcher{client: &checkedClient, maxBytes: maxBytes, allowedHTTP: allowed}
 }
 
 func (fetcher *HTTPFetcher) Fetch(ctx context.Context, source Source) ([]byte, string, error) {
@@ -71,7 +76,7 @@ func ParseExpiry(header string) time.Time {
 
 func (fetcher *HTTPFetcher) fetch(ctx context.Context, source Source, expiry *time.Time) ([]byte, string, error) {
 	parsed, err := url.Parse(source.URL)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+	if err != nil || (parsed.Scheme != "https" && !(parsed.Scheme == "http" && fetcher.allowedHTTP[source.URL])) || parsed.Host == "" {
 		return nil, "", fmt.Errorf("source %s must be an absolute HTTPS URL", source.ID)
 	}
 	if fetcher.maxBytes <= 0 {
