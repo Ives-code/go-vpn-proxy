@@ -107,6 +107,9 @@ required.
 
 ## Other behavior
 
+- Clash YAML AnyTLS subscriptions are supported, including TLS/SNI, client
+  fingerprint and non-negative session-pool settings (intervals are seconds).
+
 - The first release enables VLESS, AnyTLS, Hysteria2, and Trojan subscription
   nodes plus HTTP upstream proxies;
   unsupported node protocols are rejected explicitly instead of being loaded

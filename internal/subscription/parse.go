@@ -24,7 +24,7 @@ var supportedRuntimeTypes = map[string]bool{
 	"anytls": true, "http": true, "hysteria2": true, "trojan": true, "vless": true,
 }
 
-var supportedNormalizedTypes = map[string]bool{"http": true, "vless": true}
+var supportedNormalizedTypes = map[string]bool{"http": true, "vless": true, "anytls": true}
 
 const (
 	MaxNodesPerSource  = 512
@@ -117,6 +117,19 @@ func parseClash(body []byte) ([]NodeSpec, bool, error) {
 }
 
 func validateClashNode(input map[string]any) error {
+	if strings.ToLower(stringValue(input, "type")) == "anytls" {
+		if stringValue(input, "password") == "" {
+			return errors.New("AnyTLS password is required")
+		}
+		for _, key := range []string{"idle-session-check-interval", "idle-session-timeout", "min-idle-session"} {
+			if raw, exists := input[key]; exists {
+				if n, ok := intValue(raw); !ok || n < 0 {
+					return errors.New("invalid AnyTLS session option")
+				}
+			}
+		}
+		return nil
+	}
 	if strings.ToLower(stringValue(input, "type")) != "vless" {
 		return nil
 	}
@@ -266,6 +279,22 @@ func normalizeClashNode(input map[string]any) (map[string]any, bool) {
 		return nil, false
 	}
 	output := map[string]any{"type": typeName, "tag": stringValue(input, "name"), "server": server, "server_port": port}
+	if typeName == "anytls" {
+		copyString(output, input, "password")
+		output["tls"] = clashTLS(input)
+		for _, key := range []string{"idle-session-check-interval", "idle-session-timeout", "min-idle-session"} {
+			if raw, exists := input[key]; exists {
+				n, _ := intValue(raw)
+				target := strings.ReplaceAll(key, "-", "_")
+				if key == "min-idle-session" {
+					output[target] = n
+				} else {
+					output[target] = fmt.Sprintf("%ds", n)
+				}
+			}
+		}
+		return output, true
+	}
 	if typeName == "http" {
 		copyString(output, input, "username")
 		copyString(output, input, "password")
