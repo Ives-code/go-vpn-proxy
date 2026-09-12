@@ -1,0 +1,270 @@
+package httpproxy
+
+import (
+	"bufio"
+	"context"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"dual-egress-gateway/internal/pool"
+	"dual-egress-gateway/internal/subscription"
+)
+
+type recordingFactory struct {
+	mu      sync.Mutex
+	dialers map[string]*recordingDialer
+}
+
+type recordingDialer struct {
+	id       string
+	fail     bool
+	calls    *atomic.Int32
+	sequence *[]string
+	mu       *sync.Mutex
+}
+
+func (dialer *recordingDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	dialer.calls.Add(1)
+	dialer.mu.Lock()
+	*dialer.sequence = append(*dialer.sequence, dialer.id)
+	dialer.mu.Unlock()
+	if dialer.fail {
+		return nil, errors.New("secret-endpoint.invalid:443 failed")
+	}
+	return (&net.Dialer{}).DialContext(ctx, network, address)
+}
+
+func (*recordingDialer) Close() error { return nil }
+
+func (factory *recordingFactory) Build(spec subscription.NodeSpec) (pool.Dialer, error) {
+	factory.mu.Lock()
+	defer factory.mu.Unlock()
+	return factory.dialers[spec.ID], nil
+}
+
+type proxyFixture struct {
+	server   *Server
+	listener net.Listener
+	registry *pool.Registry
+	calls    *atomic.Int32
+	sequence *[]string
+}
+
+func newProxyFixture(t *testing.T, failing map[string]bool) *proxyFixture {
+	t.Helper()
+	calls := &atomic.Int32{}
+	sequence := []string{}
+	sequenceMu := &sync.Mutex{}
+	factory := &recordingFactory{dialers: make(map[string]*recordingDialer)}
+	var specs []subscription.NodeSpec
+	for _, id := range []string{"a", "b", "c"} {
+		factory.dialers[id] = &recordingDialer{id: id, fail: failing[id], calls: calls, sequence: &sequence, mu: sequenceMu}
+		specs = append(specs, subscription.NodeSpec{ID: id, Type: "test"})
+	}
+	registry := pool.NewRegistry(factory, 30*time.Second)
+	if _, err := registry.Apply(subscription.Snapshot{Nodes: specs}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	for _, id := range []string{"a", "b", "c"} {
+		registry.MarkSuccess(id, time.Millisecond)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	server := New("test", Config{Username: "user", Password: "password", DialTimeout: time.Second}, registry, pool.NewSelector(), nil)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = server.Shutdown(ctx)
+	})
+	return &proxyFixture{server: server, listener: listener, registry: registry, calls: calls, sequence: &sequence}
+}
+
+func TestProxyRequiresAuthenticationBeforeDial(t *testing.T) {
+	fixture := newProxyFixture(t, nil)
+	proxyURL, _ := url.Parse("http://" + fixture.listener.Addr().String())
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+
+	response, err := client.Get("http://example.invalid/")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusProxyAuthRequired {
+		t.Fatalf("status = %d", response.StatusCode)
+	}
+	if got := fixture.calls.Load(); got != 0 {
+		t.Fatalf("dial calls before auth = %d", got)
+	}
+}
+
+func TestConnectRetriesUntilNodeSucceeds(t *testing.T) {
+	echoListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("echo listen: %v", err)
+	}
+	defer echoListener.Close()
+	go func() {
+		conn, acceptErr := echoListener.Accept()
+		if acceptErr == nil {
+			defer conn.Close()
+			_, _ = io.Copy(conn, conn)
+		}
+	}()
+	fixture := newProxyFixture(t, map[string]bool{"a": true})
+
+	conn := authenticatedConnect(t, fixture.listener.Addr().String(), echoListener.Addr().String())
+	defer conn.Close()
+	if _, err := conn.Write([]byte("hello\n")); err != nil {
+		t.Fatalf("write tunnel: %v", err)
+	}
+	line, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil || line != "hello\n" {
+		t.Fatalf("tunnel echo=%q err=%v", line, err)
+	}
+	if got := append([]string(nil), (*fixture.sequence)...); len(got) < 2 || got[0] != "a" || got[1] != "b" {
+		t.Fatalf("dial sequence = %#v", got)
+	}
+}
+
+func TestAllNodesFailReturnsRedacted502(t *testing.T) {
+	fixture := newProxyFixture(t, map[string]bool{"a": true, "b": true, "c": true})
+	conn, err := net.Dial("tcp", fixture.listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer conn.Close()
+	auth := base64.StdEncoding.EncodeToString([]byte("user:password"))
+	_, _ = fmt.Fprintf(conn, "CONNECT target.invalid:443 HTTP/1.1\r\nHost: target.invalid:443\r\nProxy-Authorization: Basic %s\r\n\r\n", auth)
+	response, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodConnect})
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	defer response.Body.Close()
+	body, _ := io.ReadAll(response.Body)
+	if response.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d", response.StatusCode)
+	}
+	for _, forbidden := range []string{"secret-endpoint", "target.invalid", "failed"} {
+		if strings.Contains(string(body), forbidden) {
+			t.Fatalf("502 body leaked %q: %q", forbidden, body)
+		}
+	}
+}
+
+func TestKeepAlivePinsNode(t *testing.T) {
+	origin := http.Server{Handler: http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Connection", "close")
+		_, _ = response.Write([]byte(request.URL.Path))
+	})}
+	originListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("origin listen: %v", err)
+	}
+	defer origin.Close()
+	go func() { _ = origin.Serve(originListener) }()
+
+	fixture := newProxyFixture(t, nil)
+	conn, err := net.Dial("tcp", fixture.listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	auth := base64.StdEncoding.EncodeToString([]byte("user:password"))
+	for _, path := range []string{"/first", "/second"} {
+		_, _ = fmt.Fprintf(conn, "GET http://%s%s HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: Basic %s\r\n\r\n", originListener.Addr(), path, originListener.Addr(), auth)
+		response, readErr := http.ReadResponse(reader, &http.Request{Method: http.MethodGet})
+		if readErr != nil {
+			t.Fatalf("read %s response: %v", path, readErr)
+		}
+		body, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		if string(body) != path {
+			t.Fatalf("body = %q, want %q", body, path)
+		}
+	}
+	if got := append([]string(nil), (*fixture.sequence)...); len(got) != 2 || got[0] != "a" || got[1] != "a" {
+		t.Fatalf("keep-alive dial sequence = %#v", got)
+	}
+}
+
+func TestHTTPUpgradeStaysOnSelectedNode(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if !strings.EqualFold(request.Header.Get("Upgrade"), "websocket") {
+			http.Error(response, "upgrade required", http.StatusBadRequest)
+			return
+		}
+		client, buffered, err := response.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		defer client.Close()
+		_, _ = client.Write([]byte("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n"))
+		if buffered.Reader.Buffered() > 0 {
+			_, _ = io.CopyN(client, buffered, int64(buffered.Reader.Buffered()))
+		}
+		_, _ = io.Copy(client, client)
+	}))
+	defer origin.Close()
+
+	fixture := newProxyFixture(t, nil)
+	conn, err := net.Dial("tcp", fixture.listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer conn.Close()
+	auth := base64.StdEncoding.EncodeToString([]byte("user:password"))
+	_, _ = fmt.Fprintf(conn, "GET %s/ HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nProxy-Authorization: Basic %s\r\n\r\n", origin.URL, strings.TrimPrefix(origin.URL, "http://"), auth)
+	reader := bufio.NewReader(conn)
+	response, err := http.ReadResponse(reader, &http.Request{Method: http.MethodGet})
+	if err != nil {
+		t.Fatalf("read upgrade response: %v", err)
+	}
+	if response.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("upgrade status = %d", response.StatusCode)
+	}
+	if _, err := conn.Write([]byte("ws-payload\n")); err != nil {
+		t.Fatalf("write upgraded tunnel: %v", err)
+	}
+	line, err := reader.ReadString('\n')
+	if err != nil || line != "ws-payload\n" {
+		t.Fatalf("upgrade echo=%q err=%v", line, err)
+	}
+	if got := append([]string(nil), (*fixture.sequence)...); len(got) != 1 || got[0] != "a" {
+		t.Fatalf("upgrade dial sequence = %#v", got)
+	}
+}
+
+func authenticatedConnect(t *testing.T, proxyAddress, targetAddress string) net.Conn {
+	t.Helper()
+	conn, err := net.Dial("tcp", proxyAddress)
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	auth := base64.StdEncoding.EncodeToString([]byte("user:password"))
+	_, _ = fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: Basic %s\r\n\r\n", targetAddress, targetAddress, auth)
+	response, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodConnect})
+	if err != nil {
+		conn.Close()
+		t.Fatalf("read CONNECT response: %v", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		conn.Close()
+		t.Fatalf("CONNECT status = %d", response.StatusCode)
+	}
+	return conn
+}
