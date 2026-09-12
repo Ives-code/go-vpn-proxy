@@ -1,0 +1,1 @@
+{"outbounds":[{"type":"vless","tag":"fixture","server":"edge.invalid","server_port":443,"uuid":"fixture-uuid"}]}

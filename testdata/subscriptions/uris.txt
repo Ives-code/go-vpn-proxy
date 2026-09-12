@@ -1,0 +1,1 @@
+vless://fixture-uuid@edge.invalid:443?security=tls#fixture

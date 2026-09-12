@@ -1,0 +1,6 @@
+proxies:
+  - name: fixture
+    type: vless
+    server: edge.invalid
+    port: 443
+    uuid: fixture-uuid
