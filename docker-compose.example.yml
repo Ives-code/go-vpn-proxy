@@ -1,0 +1,21 @@
+services:
+  gateway:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    command: ["-config", "/etc/dual-egress-gateway/config.yaml"]
+    ports:
+      - "18080:18080"
+      - "18081:18081"
+      - "127.0.0.1:19090:19090"
+    volumes:
+      - ./config.yaml:/etc/dual-egress-gateway/config.yaml:ro
+      - ./state:/var/lib/dual-egress-gateway
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

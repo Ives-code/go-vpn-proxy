@@ -1,0 +1,30 @@
+[Unit]
+Description=Dual HTTP Egress Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dual-egress
+Group=dual-egress
+EnvironmentFile=/etc/dual-egress-gateway/gateway.env
+ExecStart=/usr/local/bin/dual-egress-gateway -config /etc/dual-egress-gateway/config.yaml
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=45s
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadWritePaths=/var/lib/dual-egress-gateway
+WorkingDirectory=/var/lib/dual-egress-gateway
+
+[Install]
+WantedBy=multi-user.target

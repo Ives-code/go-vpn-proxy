@@ -13,11 +13,21 @@ import (
 
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
-	"github.com/sagernet/sing-box/include"
+	adaptercertificate "github.com/sagernet/sing-box/adapter/certificate"
+	adapterendpoint "github.com/sagernet/sing-box/adapter/endpoint"
+	adapterinbound "github.com/sagernet/sing-box/adapter/inbound"
+	adapteroutbound "github.com/sagernet/sing-box/adapter/outbound"
+	adapterservice "github.com/sagernet/sing-box/adapter/service"
+	"github.com/sagernet/sing-box/dns"
+	"github.com/sagernet/sing-box/dns/transport/local"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/direct"
+	protocolhttp "github.com/sagernet/sing-box/protocol/http"
+	"github.com/sagernet/sing-box/protocol/vless"
 	singjson "github.com/sagernet/sing/common/json"
 	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
 )
 
 var _ pool.Factory = (*Engine)(nil)
@@ -40,14 +50,7 @@ func NewEngine(ctx context.Context) (*Engine, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	boxCtx := box.Context(
-		ctx,
-		include.InboundRegistry(),
-		include.OutboundRegistry(),
-		include.EndpointRegistry(),
-		include.DNSTransportRegistry(),
-		include.ServiceRegistry(),
-	)
+	boxCtx := minimalBoxContext(ctx)
 	instance, err := box.New(box.Options{
 		Context: boxCtx,
 		Options: option.Options{Log: &option.LogOptions{Disabled: true}},
@@ -67,6 +70,34 @@ func NewEngine(ctx context.Context) (*Engine, error) {
 		logger:  factory.NewLogger("dynamic-outbound"),
 		builtBy: make(map[string]string),
 	}, nil
+}
+
+func minimalBoxContext(ctx context.Context) context.Context {
+	inboundRegistry := adapterinbound.NewRegistry()
+	outboundRegistry := minimalOutboundRegistry()
+	endpointRegistry := adapterendpoint.NewRegistry()
+	dnsRegistry := dns.NewTransportRegistry()
+	local.RegisterTransport(dnsRegistry)
+	serviceRegistry := adapterservice.NewRegistry()
+	certificateRegistry := adaptercertificate.NewRegistry()
+	boxCtx := box.Context(
+		ctx,
+		inboundRegistry,
+		outboundRegistry,
+		endpointRegistry,
+		dnsRegistry,
+		serviceRegistry,
+		certificateRegistry,
+	)
+	return service.ContextWith[adapter.PlatformInterface](boxCtx, (*platformStub)(nil))
+}
+
+func minimalOutboundRegistry() *adapteroutbound.Registry {
+	registry := adapteroutbound.NewRegistry()
+	direct.RegisterOutbound(registry)
+	protocolhttp.RegisterOutbound(registry)
+	vless.RegisterOutbound(registry)
+	return registry
 }
 
 func (engine *Engine) Build(spec subscription.NodeSpec) (pool.Dialer, error) {

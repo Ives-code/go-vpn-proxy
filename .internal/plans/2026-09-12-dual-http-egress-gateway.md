@@ -6,7 +6,7 @@
 
 **Architecture:** A subscription manager produces atomic source snapshots of sanitized `NodeSpec` values. A shared health registry owns node availability and sing-box outbound dialers; two HTTP proxy servers each own a round-robin cursor but use that registry for try-each-once failover. Existing tunnels retain their selected dialer while refresh removes the node only from new assignments.
 
-**Tech Stack:** Go 1.24+, `github.com/sagernet/sing-box` v1.12.12 initially aligned with the proven Easy Proxies integration, `gopkg.in/yaml.v3`, Go standard-library HTTP/CONNECT server, Docker, systemd, WSL Ubuntu 24.04.
+**Tech Stack:** Go 1.26+, `github.com/sagernet/sing-box` v1.14.0, `gopkg.in/yaml.v3`, Go standard-library HTTP/CONNECT server, Docker, systemd, WSL Ubuntu 24.04.
 
 ## Global Constraints
 

@@ -12,7 +12,7 @@ The project lives entirely under `D:/data/yc/dual-egress-gateway`. Existing file
 
 ## Chosen Approach
 
-Use Go with sing-box as the outbound protocol engine. Reuse narrowly selected MIT-licensed parsing, builder, and pool concepts from `jasonwong1991/easy_proxies`, retaining license and attribution, instead of reimplementing VMess, VLESS, Trojan, Shadowsocks, Hysteria2, TUIC, AnyTLS, HTTP, and SOCKS transports.
+Use Go with sing-box as the outbound protocol engine. Reuse narrowly selected MIT-licensed parsing, builder, and pool concepts from `jasonwong1991/easy_proxies`, retaining license and attribution. The first release registers only VLESS (the supplied working subscription's protocol) and HTTP upstream proxies, avoiding unused protocol modules and their attack surface; additional protocols require an explicit, tested registry expansion.
 
 The service runs two HTTP proxy servers inside one process:
 

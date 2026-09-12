@@ -35,6 +35,15 @@ func TestFactoryRejectsNonProxyOutbound(t *testing.T) {
 	}
 }
 
+func TestMinimalRegistryRecognizesSupportedProxyTypes(t *testing.T) {
+	registry := minimalOutboundRegistry()
+	for _, typeName := range []string{"http", "vless"} {
+		if _, ok := registry.CreateOptions(typeName); !ok {
+			t.Errorf("outbound type %q is not registered", typeName)
+		}
+	}
+}
+
 func TestEngineBuildsHTTPOutboundDialer(t *testing.T) {
 	echoListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
