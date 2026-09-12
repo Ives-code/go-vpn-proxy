@@ -276,6 +276,34 @@ type NodeLease struct {
 	once     sync.Once
 }
 
+// Shared nodes belong to each source; per-source totals must not be summed as a unique pool total.
+func (registry *Registry) StatsBySource() map[string]Stats {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	result := make(map[string]Stats)
+	for _, id := range registry.order {
+		n := registry.nodes[id]
+		if n == nil || n.removed {
+			continue
+		}
+		for _, source := range n.spec.SourceIDs {
+			s := result[source]
+			s.Total++
+			s.ActiveLeases += n.active
+			switch {
+			case n.healthy:
+				s.Healthy++
+			case n.lastFailure == "":
+				s.Quarantined++
+			default:
+				s.Unhealthy++
+			}
+			result[source] = s
+		}
+	}
+	return result
+}
+
 func (lease *NodeLease) Close() error {
 	lease.once.Do(func() {
 		lease.registry.release(lease.ID, lease.gated)

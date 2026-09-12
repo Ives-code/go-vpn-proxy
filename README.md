@@ -46,6 +46,23 @@ node for the tunnel lifetime.
 
 ## Status and refresh
 
+### 查看各订阅信息
+
+```bash
+./dual-egress-gateway subscriptions
+# 自定义管理端口：
+./dual-egress-gateway subscriptions -admin http://127.0.0.1:19090
+```
+
+显示所有已配置订阅的编号、脱敏地址、刷新结果、生效状态、到期时间，以及
+解析/加载/可用/不可用/待检测节点数。地址路径和密钥不会显示。生效表示至少
+有一个可用节点；刷新失败但有已加载节点时标记“使用缓存”。到期信息未知时
+明确显示未知，已过期与当前节点是否仍可用分别显示。
+
+此命令仅执行只读 `GET /status`，不需要加载环境密钥、不触发刷新、不启动代理。
+客户端与服务端都需要包含此功能；查询旧版运行进程时会提示维护时更新重启，
+不会猜测缺失的分项数量。汇总是去重节点数，共享节点可计入多条订阅。
+
 The following endpoints are intentionally loopback-only:
 
 ```bash

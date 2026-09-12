@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -164,14 +165,41 @@ func (application *App) Status() admin.Status {
 	application.statusMu.RUnlock()
 	snapshot := application.subscriptions.Snapshot()
 	return admin.Status{
-		Ready:        stats.Healthy > 0,
-		Nodes:        stats,
-		HTTPActive:   application.httpProxy.ActiveConnections(),
-		WSActive:     application.wsProxy.ActiveConnections(),
-		LastRefresh:  lastRefresh,
-		SourceErrors: snapshot.SourceErrors,
-		ExpiresAt:    snapshot.ExpiresAt,
+		Subscriptions: application.subscriptionStatuses(snapshot),
+		Ready:         stats.Healthy > 0,
+		Nodes:         stats,
+		HTTPActive:    application.httpProxy.ActiveConnections(),
+		WSActive:      application.wsProxy.ActiveConnections(),
+		LastRefresh:   lastRefresh,
+		SourceErrors:  snapshot.SourceErrors,
+		ExpiresAt:     snapshot.ExpiresAt,
 	}
+}
+
+func (application *App) subscriptionStatuses(snapshot subscription.Snapshot) []admin.SubscriptionStatus {
+	stats := application.registry.StatsBySource()
+	counts := make(map[string]int)
+	for _, node := range snapshot.Nodes {
+		for _, id := range node.SourceIDs {
+			counts[id]++
+		}
+	}
+	result := make([]admin.SubscriptionStatus, 0, len(application.config.SubscriptionURLs))
+	for i, raw := range application.config.SubscriptionURLs {
+		id := fmt.Sprint(i + 1)
+		address := "[隐藏]"
+		if u, err := url.Parse(raw); err == nil {
+			address = u.Scheme + "://" + u.Host + "/[已隐藏路径和密钥]"
+		}
+		state := "pending"
+		if snapshot.SourceErrors[id] != "" {
+			state = "failed"
+		} else if counts[id] > 0 {
+			state = "ok"
+		}
+		result = append(result, admin.SubscriptionStatus{ID: id, Address: address, ExpiresAt: snapshot.ExpiresAt[id], RefreshState: state, ParsedNodes: counts[id], Nodes: stats[id]})
+	}
+	return result
 }
 
 func (application *App) backgroundLoop(ctx context.Context, done chan<- struct{}) {

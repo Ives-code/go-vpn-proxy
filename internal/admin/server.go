@@ -13,13 +13,23 @@ import (
 )
 
 type Status struct {
-	ExpiresAt    map[string]time.Time `json:"subscription_expires_at,omitempty"`
-	Ready        bool                 `json:"ready"`
-	Nodes        pool.Stats           `json:"nodes"`
-	HTTPActive   int64                `json:"http_active_connections"`
-	WSActive     int64                `json:"ws_active_connections"`
-	LastRefresh  time.Time            `json:"last_refresh,omitempty"`
-	SourceErrors map[string]string    `json:"source_errors,omitempty"`
+	Subscriptions []SubscriptionStatus `json:"subscriptions,omitempty"`
+	ExpiresAt     map[string]time.Time `json:"subscription_expires_at,omitempty"`
+	Ready         bool                 `json:"ready"`
+	Nodes         pool.Stats           `json:"nodes"`
+	HTTPActive    int64                `json:"http_active_connections"`
+	WSActive      int64                `json:"ws_active_connections"`
+	LastRefresh   time.Time            `json:"last_refresh,omitempty"`
+	SourceErrors  map[string]string    `json:"source_errors,omitempty"`
+}
+
+type SubscriptionStatus struct {
+	ID           string     `json:"id"`
+	Address      string     `json:"address"`
+	ExpiresAt    time.Time  `json:"expires_at"`
+	RefreshState string     `json:"refresh_state"`
+	ParsedNodes  int        `json:"parsed_nodes"`
+	Nodes        pool.Stats `json:"nodes"`
 }
 
 type Provider interface {
