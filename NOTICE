@@ -1,5 +1,6 @@
 Dual Egress Gateway
 
-This project uses sing-box and may reuse narrowly selected MIT-licensed ideas or
-code from jasonwong1991/easy_proxies. Exact copied files and immutable upstream
-commit identifiers will be recorded before distribution.
+This project uses sing-box and reuses architectural ideas from the MIT-licensed
+jasonwong1991/easy_proxies v2.0.0 source at immutable commit
+787c40fdafe0d8fe9a00a9d7f6e288766324e12d. No upstream source file has been
+copied verbatim at this stage.
