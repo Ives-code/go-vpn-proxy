@@ -1,0 +1,28 @@
+[Unit]
+Description=Fixed single-node HTTP egress proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dual-egress
+Group=dual-egress
+EnvironmentFile=/etc/dual-egress-gateway/gateway.env
+ExecStart=/usr/local/bin/fixed-egress -listen 127.0.0.1:18084 -node /etc/dual-egress-fixed/node.json
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=40s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

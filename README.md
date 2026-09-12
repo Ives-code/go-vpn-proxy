@@ -13,6 +13,22 @@ shared as unhealthy by both listeners, and return after a successful probe.
 
 ## Configuration
 
+## 固定单节点入口
+
+`cmd/fixed-egress` 提供独立的固定 HTTP/HTTPS/WSS 代理，配置文件必须恰好包含
+一个节点，所有连接使用该节点，没有其他节点可供回退。使用环境变量
+`PROXY_USERNAME` / `PROXY_PASSWORD` 认证。
+
+```bash
+go build -tags "with_quic with_utls with_grpc" -o fixed-egress ./cmd/fixed-egress
+./fixed-egress -listen 127.0.0.1:18084 -node /etc/dual-egress-fixed/node.json
+```
+
+服务模板为 `deploy/dual-egress-fixed.service`，独立于轮询服务。节点文件包含
+凭据，保存在服务器私密目录，不提交到仓库。
+
+## Gateway configuration
+
 HTTPS is required by default. An operator can explicitly permit individual HTTP
 subscription URLs by listing their exact URLs in the private environment variable
 `HTTP_SUBSCRIPTION_ALLOWLIST` (newline-separated). Other HTTP URLs remain rejected,
