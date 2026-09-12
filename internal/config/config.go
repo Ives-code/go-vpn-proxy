@@ -30,6 +30,7 @@ type Config struct {
 	Password                  Secret
 	AdminToken                Secret
 	PushBaseURL               Secret
+	NotifyHostIP              string
 	SubscriptionSeedFile      string
 	SubscriptionURLs          []string
 	HTTPSubscriptionAllowlist []string
@@ -145,6 +146,13 @@ func Load(path string, lookupEnv func(string) (string, bool)) (Config, error) {
 		cfg.PushBaseURL = Secret(value)
 	}
 
+	if value, exists := lookupEnv("NOTIFY_HOST_IP"); exists {
+		value = strings.TrimSpace(value)
+		if value != "" && net.ParseIP(value) == nil {
+			return Config{}, errors.New("NOTIFY_HOST_IP must be an IP address")
+		}
+		cfg.NotifyHostIP = value
+	}
 	allowedHTTP := make(map[string]bool)
 	if value, exists := lookupEnv("HTTP_SUBSCRIPTION_ALLOWLIST"); exists {
 		for _, raw := range strings.Split(value, "\n") {

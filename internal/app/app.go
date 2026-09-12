@@ -84,7 +84,7 @@ func New(cfg config.Config, logger *slog.Logger) (*App, error) {
 	}
 	application.httpProxy = httpproxy.New("http", proxyConfig, registry, pool.NewSelector(), logger)
 	if cfg.PushBaseURL.Reveal() != "" {
-		client, err := notify.NewClient(cfg.PushBaseURL.Reveal(), nil)
+		client, err := notify.NewClient(cfg.PushBaseURL.Reveal(), nil, cfg.NotifyHostIP)
 		if err != nil {
 			_ = engine.Close()
 			return nil, err

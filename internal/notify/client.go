@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -17,9 +18,20 @@ const maxResponseBytes = 4 << 10
 type Client struct {
 	baseURL string
 	http    *http.Client
+	hostIP  string
 }
 
-func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
+func NewClient(baseURL string, httpClient *http.Client, hostIPs ...string) (*Client, error) {
+	hostIP := ""
+	if len(hostIPs) > 0 {
+		hostIP = hostIPs[0]
+		if hostIP == "" {
+			hostIP = localIP()
+		}
+		if net.ParseIP(hostIP) == nil {
+			return nil, errors.New("notification host must be an IP address")
+		}
+	}
 	parsed, err := url.Parse(baseURL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return nil, errors.New("notification base URL must be an absolute HTTP or HTTPS URL")
@@ -37,10 +49,14 @@ func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
 	clientCopy.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
-	return &Client{baseURL: strings.TrimRight(parsed.String(), "/"), http: &clientCopy}, nil
+	return &Client{baseURL: strings.TrimRight(parsed.String(), "/"), http: &clientCopy, hostIP: hostIP}, nil
 }
 
 func (client *Client) Send(ctx context.Context, title, message string) error {
+	if client.hostIP != "" {
+		title = "[" + client.hostIP + "] " + title
+		message = "本机 IP：" + client.hostIP + "\n" + message
+	}
 	endpoint := client.baseURL + "/" + url.PathEscape(title) + "/" + url.PathEscape(message)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -72,4 +88,14 @@ func (client *Client) Send(ctx context.Context, title, message string) error {
 		}
 	}
 	return nil
+}
+
+func localIP() string {
+	addresses, _ := net.InterfaceAddrs()
+	for _, address := range addresses {
+		if n, ok := address.(*net.IPNet); ok && n.IP.To4() != nil && !n.IP.IsLoopback() && !n.IP.IsLinkLocalUnicast() {
+			return n.IP.String()
+		}
+	}
+	return "127.0.0.1"
 }

@@ -137,3 +137,20 @@ func TestSecretFormattingIsRedacted(t *testing.T) {
 		}
 	}
 }
+
+func TestNotifyHostIPValidation(t *testing.T) {
+	for _, value := range []string{"192.0.2.10", "2001:db8::1", "bad-host"} {
+		env := validEnvironment()
+		env["NOTIFY_HOST_IP"] = value
+		cfg, err := Load(writeConfig(t, "{}"), lookup(env))
+		if value == "bad-host" {
+			if err == nil {
+				t.Fatal("invalid IP accepted")
+			}
+			continue
+		}
+		if err != nil || cfg.NotifyHostIP != value {
+			t.Fatalf("IP=%s err=%v", cfg.NotifyHostIP, err)
+		}
+	}
+}
