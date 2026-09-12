@@ -16,4 +16,12 @@ if git check-ignore -q -- "${main_file}"; then
   exit 1
 fi
 
+for shell_file in deploy/install-ubuntu.sh deploy/uninstall-ubuntu.sh scripts/smoke-wsl.sh; do
+  attribute="$(git check-attr eol -- "${shell_file}")"
+  [[ "${attribute}" == *'eol: lf' ]] || {
+    printf 'FAIL: %s is not forced to LF by .gitattributes\n' "${shell_file}" >&2
+    exit 1
+  }
+done
+
 printf 'PASS: repository safety checks succeeded\n'

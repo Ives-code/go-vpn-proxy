@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Literal ${...} strings below verify generated shell source.
+# shellcheck disable=SC2016
 set -Eeuo pipefail
 
 root_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -75,6 +77,12 @@ fi
 for marker in 'added_http_rule=1' 'added_ws_rule=1' 'restore_previous_firewall'; do
   grep -Fq -- "${marker}" deploy/install-ubuntu.sh || {
     printf 'FAIL: installer lacks transactional firewall marker %s\n' "${marker}" >&2
+    exit 1
+  }
+done
+for marker in 'removed_old_http_rule=1' 'removed_old_ws_rule=1' 'was_enabled=1' 'NRestarts'; do
+  grep -Fq -- "${marker}" deploy/install-ubuntu.sh || {
+    printf 'FAIL: installer lacks rollback/readiness marker %s\n' "${marker}" >&2
     exit 1
   }
 done

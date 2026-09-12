@@ -121,6 +121,8 @@ func TestParseRejectsUnknownVLESSSecurityAndTransport(t *testing.T) {
 		"unknown-transport":  []byte("vless://id@edge.invalid:443?type=quic\n"),
 		"clash-transport":    []byte("proxies:\n  - name: node\n    type: vless\n    server: edge.invalid\n    port: 443\n    uuid: id\n    network: quic\n"),
 		"incomplete-reality": []byte("vless://id@edge.invalid:443?security=reality&sni=edge.invalid\n"),
+		"clash-reality-missing": []byte("proxies:\n  - name: node\n    type: vless\n    server: edge.invalid\n    port: 443\n    uuid: id\n    security: reality\n"),
+		"clash-reality-malformed": []byte("proxies:\n  - name: node\n    type: vless\n    server: edge.invalid\n    port: 443\n    uuid: id\n    security: reality\n    reality-opts: malformed\n"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := Parse(body, "")

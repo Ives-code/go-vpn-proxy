@@ -124,7 +124,15 @@ func validateClashNode(input map[string]any) error {
 	if !oneOf(network, "", "tcp", "ws", "websocket", "grpc", "http", "h2") {
 		return errors.New("subscription contains unsupported VLESS transport")
 	}
-	if reality, ok := input["reality-opts"].(map[string]any); ok && stringValue(reality, "public-key") == "" {
+	realityValue, hasReality := input["reality-opts"]
+	reality, realityIsMap := realityValue.(map[string]any)
+	if hasReality && !realityIsMap {
+		return errors.New("subscription contains unsupported malformed VLESS Reality options")
+	}
+	if security == "reality" && (!realityIsMap || stringValue(reality, "public-key") == "") {
+		return errors.New("subscription contains unsupported incomplete VLESS Reality options")
+	}
+	if realityIsMap && stringValue(reality, "public-key") == "" {
 		return errors.New("subscription contains unsupported incomplete VLESS Reality options")
 	}
 	return nil

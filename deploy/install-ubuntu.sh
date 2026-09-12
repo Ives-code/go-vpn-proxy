@@ -37,8 +37,10 @@ write_firewall_state() {
 
 delete_firewall_rules() {
   local cidr="$1"
-  ufw --force delete allow from "${cidr}" to any port 18080 proto tcp >/dev/null 2>&1 || true
-  ufw --force delete allow from "${cidr}" to any port 18081 proto tcp >/dev/null 2>&1 || true
+  ufw --force delete allow from "${cidr}" to any port 18080 proto tcp
+  removed_old_http_rule=1
+  ufw --force delete allow from "${cidr}" to any port 18081 proto tcp
+  removed_old_ws_rule=1
 }
 
 add_firewall_rules() {
@@ -91,9 +93,13 @@ restore_previous_firewall() {
   if [[ "${added_ws_rule}" -eq 1 ]]; then
     ufw --force delete allow from "${validated_lan_cidr}" to any port 18081 proto tcp >/dev/null 2>&1 || true
   fi
-  if [[ "${removed_old_rules}" -eq 1 && -n "${old_cidr}" ]]; then
+  if [[ "${removed_old_http_rule}" -eq 1 && -n "${old_cidr}" ]]; then
     ufw allow from "${old_cidr}" to any port 18080 proto tcp comment "${APP_NAME}" >/dev/null 2>&1 || true
+  fi
+  if [[ "${removed_old_ws_rule}" -eq 1 && -n "${old_cidr}" ]]; then
     ufw allow from "${old_cidr}" to any port 18081 proto tcp comment "${APP_NAME}" >/dev/null 2>&1 || true
+  fi
+  if [[ ( "${removed_old_http_rule}" -eq 1 || "${removed_old_ws_rule}" -eq 1 ) && -n "${old_cidr}" ]]; then
     write_firewall_state "${old_cidr}"
   elif [[ -z "${old_cidr}" ]]; then
     rm -f -- "${FIREWALL_STATE}"
@@ -102,7 +108,8 @@ restore_previous_firewall() {
 
 restore_previous_install() {
   local exit_code="$?"
-  trap - ERR
+  [[ "${exit_code}" -ne 0 ]] || exit_code=1
+  trap - ERR INT TERM HUP
   restore_previous_firewall
   restore_one binary "${BINARY_DEST}"
   restore_one config "${CONFIG_DIR}/config.yaml"
@@ -113,6 +120,11 @@ restore_previous_install() {
     systemctl restart "${APP_NAME}.service" >/dev/null 2>&1 || true
   else
     systemctl stop "${APP_NAME}.service" >/dev/null 2>&1 || true
+  fi
+  if [[ "${was_enabled}" -eq 1 ]]; then
+    systemctl enable "${APP_NAME}.service" >/dev/null 2>&1 || true
+  else
+    systemctl disable "${APP_NAME}.service" >/dev/null 2>&1 || true
   fi
   rm -rf -- "${backup_dir}"
   exit "${exit_code}"
@@ -146,20 +158,30 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 service_source="${script_dir}/${APP_NAME}.service"
 [[ -f "${service_source}" ]] || die "service template is missing"
 
+# These variables are read through Bash indirect expansion in restore_one.
+# shellcheck disable=SC2034
 had_binary=0
+# shellcheck disable=SC2034
 had_config=0
+# shellcheck disable=SC2034
 had_environment=0
+# shellcheck disable=SC2034
 had_service=0
 was_active=0
+was_enabled=0
 backup_dir=""
 old_cidr=""
 added_http_rule=0
 added_ws_rule=0
-removed_old_rules=0
+removed_old_http_rule=0
+removed_old_ws_rule=0
 firewall_changed=0
 
 backup_previous_install
-trap restore_previous_install ERR
+if systemctl is-enabled --quiet "${APP_NAME}.service"; then
+  was_enabled=1
+fi
+trap restore_previous_install ERR INT TERM HUP
 
 if [[ -e "${FIREWALL_STATE}" || -L "${FIREWALL_STATE}" ]]; then
   [[ -f "${FIREWALL_STATE}" && ! -L "${FIREWALL_STATE}" ]] || die "firewall state must be a regular file"
@@ -182,7 +204,6 @@ if [[ -n "${validated_lan_cidr}" ]] && command -v ufw >/dev/null 2>&1 && LC_ALL=
     firewall_changed=1
     if [[ -n "${old_cidr}" ]]; then
       delete_firewall_rules "${old_cidr}"
-      removed_old_rules=1
     fi
     add_firewall_rules "${validated_lan_cidr}"
     write_firewall_state "${validated_lan_cidr}"
@@ -191,8 +212,17 @@ fi
 
 systemctl daemon-reload
 systemctl enable "${APP_NAME}.service"
+restart_count_before="$(systemctl show "${APP_NAME}.service" -p NRestarts --value 2>/dev/null || printf '0')"
 systemctl restart "${APP_NAME}.service"
-trap - ERR
+for _ in 1 2 3 4 5; do
+  sleep 1
+  systemctl is-active --quiet "${APP_NAME}.service" || die "service did not remain active after restart"
+  main_pid="$(systemctl show "${APP_NAME}.service" -p MainPID --value)"
+  [[ "${main_pid}" =~ ^[1-9][0-9]*$ ]] || die "service has no running main process"
+done
+restart_count_after="$(systemctl show "${APP_NAME}.service" -p NRestarts --value)"
+[[ "${restart_count_after}" == "${restart_count_before}" ]] || die "service restarted unexpectedly during readiness window"
+trap - ERR INT TERM HUP
 rm -rf -- "${backup_dir}"
 
 printf '[%s] installed; inspect with: systemctl status %s\n' "${APP_NAME}" "${APP_NAME}"
