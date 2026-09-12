@@ -121,7 +121,8 @@ if grep -Fq 'COPY . .' Dockerfile; then
   exit 1
 fi
 
-if git grep -nE 'OGJj|e72cd6|subscribe\.php\?key=|get\.sushi2\.cloud/sushi/' \
+secret_pattern='OG''Jj|e72''cd6|subscribe\.php\?''key=|get\.sushi2\.cloud/''sushi/'
+if git grep -nE "${secret_pattern}" \
   -- '*.go' '*.yaml' '*.yml' '*.sh' 'Dockerfile' ':!tests/test_deploy.sh'; then
   printf 'FAIL: a real subscription credential is present in tracked project content\n' >&2
   exit 1
