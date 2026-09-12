@@ -3,5 +3,5 @@ config.yaml
 state/
 bin/
 coverage.out
-dual-egress-gateway
-dual-egress-gateway.exe
+/dual-egress-gateway
+/dual-egress-gateway.exe
