@@ -9,7 +9,7 @@ environment_file="${GATEWAY_ENV_FILE:-.env}"
 [[ -f "${environment_file}" ]] || { printf 'missing gateway environment file\n' >&2; exit 1; }
 
 set -a
-# shellcheck disable=SC1091
+# shellcheck disable=SC1090
 source "${environment_file}"
 set +a
 

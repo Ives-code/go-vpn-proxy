@@ -117,11 +117,11 @@ func TestParseRejectsExcessiveStructuralComplexity(t *testing.T) {
 
 func TestParseRejectsUnknownVLESSSecurityAndTransport(t *testing.T) {
 	for name, body := range map[string][]byte{
-		"unknown-security":   []byte("vless://id@edge.invalid:443?security=unknown\n"),
-		"unknown-transport":  []byte("vless://id@edge.invalid:443?type=quic\n"),
-		"clash-transport":    []byte("proxies:\n  - name: node\n    type: vless\n    server: edge.invalid\n    port: 443\n    uuid: id\n    network: quic\n"),
-		"incomplete-reality": []byte("vless://id@edge.invalid:443?security=reality&sni=edge.invalid\n"),
-		"clash-reality-missing": []byte("proxies:\n  - name: node\n    type: vless\n    server: edge.invalid\n    port: 443\n    uuid: id\n    security: reality\n"),
+		"unknown-security":        []byte("vless://id@edge.invalid:443?security=unknown\n"),
+		"unknown-transport":       []byte("vless://id@edge.invalid:443?type=quic\n"),
+		"clash-transport":         []byte("proxies:\n  - name: node\n    type: vless\n    server: edge.invalid\n    port: 443\n    uuid: id\n    network: quic\n"),
+		"incomplete-reality":      []byte("vless://id@edge.invalid:443?security=reality&sni=edge.invalid\n"),
+		"clash-reality-missing":   []byte("proxies:\n  - name: node\n    type: vless\n    server: edge.invalid\n    port: 443\n    uuid: id\n    security: reality\n"),
 		"clash-reality-malformed": []byte("proxies:\n  - name: node\n    type: vless\n    server: edge.invalid\n    port: 443\n    uuid: id\n    security: reality\n    reality-opts: malformed\n"),
 	} {
 		t.Run(name, func(t *testing.T) {
