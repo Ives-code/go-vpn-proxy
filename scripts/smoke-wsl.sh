@@ -77,10 +77,11 @@ import json
 import os
 
 status = json.loads(os.environ["STATUS_JSON"])
-message = status.get("source_errors", {}).get("2", "")
-raise SystemExit(0 if message else 1)
+source_error = status.get("source_errors", {}).get("2", "")
+node_total = int(status.get("nodes", {}).get("total", 0))
+raise SystemExit(0 if not source_error and node_total >= 50 else 1)
 PY
-  printf 'source 2 failure was not isolated in status output\n' >&2
+  printf 'replacement source 2 was not admitted into the combined pool\n' >&2
   exit 1
 }
 

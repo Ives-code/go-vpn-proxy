@@ -37,7 +37,7 @@ func TestFactoryRejectsNonProxyOutbound(t *testing.T) {
 
 func TestMinimalRegistryRecognizesSupportedProxyTypes(t *testing.T) {
 	registry := minimalOutboundRegistry()
-	for _, typeName := range []string{"http", "vless"} {
+	for _, typeName := range []string{"http", "vless", "anytls", "hysteria2", "trojan"} {
 		if _, ok := registry.CreateOptions(typeName); !ok {
 			t.Errorf("outbound type %q is not registered", typeName)
 		}

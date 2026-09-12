@@ -20,7 +20,11 @@ var ignoredOutboundTypes = map[string]bool{
 	"block": true, "direct": true, "dns": true, "selector": true, "urltest": true,
 }
 
-var supportedProxyTypes = map[string]bool{"http": true, "vless": true}
+var supportedRuntimeTypes = map[string]bool{
+	"anytls": true, "http": true, "hysteria2": true, "trojan": true, "vless": true,
+}
+
+var supportedNormalizedTypes = map[string]bool{"http": true, "vless": true}
 
 const (
 	MaxNodesPerSource  = 512
@@ -80,7 +84,7 @@ func parseJSON(body []byte) ([]NodeSpec, bool, error) {
 	default:
 		return nil, true, errors.New("JSON subscription root must be an object or array")
 	}
-	if unsupportedType(entries) != "" {
+	if unsupportedType(entries, supportedRuntimeTypes) != "" {
 		return nil, true, errors.New("subscription contains an unsupported proxy protocol")
 	}
 
@@ -99,7 +103,7 @@ func parseClash(body []byte) ([]NodeSpec, bool, error) {
 	if !ok {
 		return nil, false, nil
 	}
-	if unsupportedType(proxies) != "" {
+	if unsupportedType(proxies, supportedNormalizedTypes) != "" {
 		return nil, true, errors.New("subscription contains an unsupported proxy protocol")
 	}
 	for _, entry := range proxies {
@@ -168,14 +172,14 @@ func validateStructure(root any) error {
 	return walk(root, 0)
 }
 
-func unsupportedType(entries []any) string {
+func unsupportedType(entries []any, allowed map[string]bool) string {
 	for _, entry := range entries {
 		item, ok := entry.(map[string]any)
 		if !ok {
 			continue
 		}
 		typeName := strings.ToLower(stringValue(item, "type"))
-		if typeName != "" && !ignoredOutboundTypes[typeName] && !supportedProxyTypes[typeName] {
+		if typeName != "" && !ignoredOutboundTypes[typeName] && !allowed[typeName] {
 			return typeName
 		}
 	}
@@ -191,8 +195,11 @@ func nodesFromMaps(entries []any, format Format, nameKey string) []NodeSpec {
 		}
 		typeName, _ := item["type"].(string)
 		typeName = strings.ToLower(strings.TrimSpace(typeName))
-		if typeName == "" || ignoredOutboundTypes[typeName] || !supportedProxyTypes[typeName] {
+		if typeName == "" || ignoredOutboundTypes[typeName] || !supportedRuntimeTypes[typeName] {
 			continue
+		}
+		if format == FormatSingBox && typeName == "vless" {
+			item = normalizeSingBoxVLESS(item)
 		}
 		tag, _ := item[nameKey].(string)
 		raw, err := json.Marshal(item)
@@ -208,6 +215,25 @@ func nodesFromMaps(entries []any, format Format, nameKey string) []NodeSpec {
 		})
 	}
 	return nodes
+}
+
+func normalizeSingBoxVLESS(input map[string]any) map[string]any {
+	output := cloneMap(input)
+	tlsOptions, ok := input["tls"].(map[string]any)
+	if !ok {
+		return output
+	}
+	reality, ok := tlsOptions["reality"].(map[string]any)
+	if !ok || !boolValue(reality["enabled"]) {
+		return output
+	}
+	if _, hasUTLS := tlsOptions["utls"]; hasUTLS {
+		return output
+	}
+	tlsCopy := cloneMap(tlsOptions)
+	tlsCopy["utls"] = map[string]any{"enabled": true, "fingerprint": "chrome"}
+	output["tls"] = tlsCopy
+	return output
 }
 
 func nodesFromClash(entries []any) []NodeSpec {
@@ -231,7 +257,7 @@ func nodesFromClash(entries []any) []NodeSpec {
 
 func normalizeClashNode(input map[string]any) (map[string]any, bool) {
 	typeName := strings.ToLower(stringValue(input, "type"))
-	if !supportedProxyTypes[typeName] {
+	if !supportedNormalizedTypes[typeName] {
 		return nil, false
 	}
 	server := stringValue(input, "server")

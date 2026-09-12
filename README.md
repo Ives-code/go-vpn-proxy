@@ -92,9 +92,12 @@ required.
 
 ## Known behavior
 
-- The first release enables VLESS subscription nodes and HTTP upstream proxies;
+- The first release enables VLESS, AnyTLS, Hysteria2, and Trojan subscription
+  nodes plus HTTP upstream proxies;
   unsupported node protocols are rejected explicitly instead of being loaded
   through unused sing-box protocol modules.
+- Reality VLESS nodes that omit uTLS are normalized to an enabled Chrome uTLS
+  fingerprint because sing-box requires uTLS for Reality clients.
 - Existing CONNECT/WebSocket tunnels are not migrated when a node fails.
 - HTTP keep-alive requests on one client connection retain its selected node.
 - A generic HTTPS probe cannot guarantee that every node can reach every target;

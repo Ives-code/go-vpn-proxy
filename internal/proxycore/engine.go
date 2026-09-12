@@ -22,8 +22,11 @@ import (
 	"github.com/sagernet/sing-box/dns/transport/local"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/anytls"
 	"github.com/sagernet/sing-box/protocol/direct"
 	protocolhttp "github.com/sagernet/sing-box/protocol/http"
+	"github.com/sagernet/sing-box/protocol/hysteria2"
+	"github.com/sagernet/sing-box/protocol/trojan"
 	"github.com/sagernet/sing-box/protocol/vless"
 	singjson "github.com/sagernet/sing/common/json"
 	M "github.com/sagernet/sing/common/metadata"
@@ -94,6 +97,9 @@ func minimalOutboundRegistry() *adapteroutbound.Registry {
 	registry := adapteroutbound.NewRegistry()
 	direct.RegisterOutbound(registry)
 	protocolhttp.RegisterOutbound(registry)
+	anytls.RegisterOutbound(registry)
+	hysteria2.RegisterOutbound(registry)
+	trojan.RegisterOutbound(registry)
 	vless.RegisterOutbound(registry)
 	return registry
 }
@@ -132,7 +138,7 @@ func (engine *Engine) Build(spec subscription.NodeSpec) (pool.Dialer, error) {
 		outboundOptions.Type,
 		outboundOptions.Options,
 	); err != nil {
-		return nil, fmt.Errorf("create %s outbound", typeName)
+		return nil, outboundCreateError{typeName: typeName, nodeID: spec.ID, cause: err}
 	}
 	outbound, ok := engine.box.Outbound().Outbound(tag)
 	if !ok {
@@ -141,6 +147,18 @@ func (engine *Engine) Build(spec subscription.NodeSpec) (pool.Dialer, error) {
 	engine.builtBy[tag] = spec.ID
 	return &nodeDialer{engine: engine, tag: tag, outbound: outbound}, nil
 }
+
+type outboundCreateError struct {
+	typeName string
+	nodeID   string
+	cause    error
+}
+
+func (err outboundCreateError) Error() string {
+	return fmt.Sprintf("create %s outbound %s", err.typeName, err.nodeID)
+}
+
+func (err outboundCreateError) Unwrap() error { return err.cause }
 
 func (engine *Engine) Close() error {
 	engine.mu.Lock()

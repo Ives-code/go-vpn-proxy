@@ -26,6 +26,39 @@ func TestParseSingBoxJSON(t *testing.T) {
 	}
 }
 
+func TestParseSingBoxJSONAcceptsEnabledRuntimeProtocols(t *testing.T) {
+	body := []byte(`{"outbounds":[
+		{"type":"anytls","tag":"a","server":"a.invalid","server_port":443,"password":"secret"},
+		{"type":"hysteria2","tag":"h","server":"h.invalid","server_port":443,"password":"secret"},
+		{"type":"trojan","tag":"t","server":"t.invalid","server_port":443,"password":"secret"},
+		{"type":"vless","tag":"v","server":"v.invalid","server_port":443,"uuid":"id"}
+	]}`)
+	nodes, err := Parse(body, "")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if len(nodes) != 4 {
+		t.Fatalf("node count = %d", len(nodes))
+	}
+}
+
+func TestParseAddsUTLSWhenRealityRequiresIt(t *testing.T) {
+	body := []byte(`{"outbounds":[{"type":"vless","tag":"node","server":"edge.invalid","server_port":443,"uuid":"id","tls":{"enabled":true,"server_name":"edge.invalid","reality":{"enabled":true,"public_key":"key","short_id":"01"}}}]}`)
+	nodes, err := Parse(body, "")
+	if err != nil || len(nodes) != 1 {
+		t.Fatalf("Parse nodes=%d err=%v", len(nodes), err)
+	}
+	var options map[string]any
+	if err := json.Unmarshal(nodes[0].Options, &options); err != nil {
+		t.Fatalf("unmarshal options: %v", err)
+	}
+	tlsOptions := options["tls"].(map[string]any)
+	utls, ok := tlsOptions["utls"].(map[string]any)
+	if !ok || utls["enabled"] != true || utls["fingerprint"] != "chrome" {
+		t.Fatalf("uTLS fallback = %#v", tlsOptions["utls"])
+	}
+}
+
 func TestParseClashYAML(t *testing.T) {
 	body := []byte("proxies:\n  - name: friendly-name\n    type: vless\n    server: edge.invalid\n    port: 443\n    uuid: example-uuid\n")
 

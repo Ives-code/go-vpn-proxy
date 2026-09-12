@@ -445,7 +445,7 @@ git commit -m "feat: package and verify Ubuntu gateway"
 ## Execution Notes
 
 - Before Task 1, inspect the selected Easy Proxies upstream commit and record its immutable commit ID in `NOTICE`.
-- The first supplied subscription currently returns valid sing-box JSON with 29 proxy outbounds under a sing-box User-Agent; the second currently returns HTTP 404 for all tested User-Agents. These observations are test-environment state, not committed configuration.
+- The first supplied subscription returns 29 VLESS outbounds. The replacement second source returns 29 sing-box outbounds across AnyTLS, Hysteria2, Trojan, and VLESS; both sources pass the live WSL smoke test. These observations are test-environment state, not committed configuration.
 - If the pinned sing-box API cannot support safe independent outbound lifecycles, stop that task and switch to a supervised sing-box subprocess with loopback-only internal listeners; do not weaken connection drain, retry, or secret-handling requirements.
 
 ## Completion Evidence
