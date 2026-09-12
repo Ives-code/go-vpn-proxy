@@ -20,10 +20,18 @@ import ipaddress
 import sys
 ipaddress.ip_network(sys.argv[1], strict=False)
 PY
-  if command -v ufw >/dev/null 2>&1; then
-    ufw --force delete allow from "${lan_cidr}" to any port 18080 proto tcp >/dev/null 2>&1 || true
-    ufw --force delete allow from "${lan_cidr}" to any port 18081 proto tcp >/dev/null 2>&1 || true
-  fi
+  command -v ufw >/dev/null 2>&1 || {
+    printf 'ufw is unavailable; preserving firewall ownership state at %s\n' "${FIREWALL_STATE}" >&2
+    exit 1
+  }
+  ufw --force delete allow from "${lan_cidr}" to any port 18080 proto tcp || {
+    printf 'failed to remove managed HTTP rule; preserving firewall ownership state\n' >&2
+    exit 1
+  }
+  ufw --force delete allow from "${lan_cidr}" to any port 18081 proto tcp || {
+    printf 'failed to remove managed WS rule; preserving firewall ownership state\n' >&2
+    exit 1
+  }
   rm -f -- "${FIREWALL_STATE}"
 fi
 

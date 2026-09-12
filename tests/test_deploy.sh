@@ -100,6 +100,18 @@ if grep -Eq 'ufw allow[[:space:]]+[0-9]+/tcp' deploy/install-ubuntu.sh; then
   printf 'FAIL: installer contains an unscoped UFW allow rule\n' >&2
   exit 1
 fi
+if grep -Eq 'if .*validated_lan_cidr.*ufw status' deploy/install-ubuntu.sh; then
+  printf 'FAIL: managed UFW rules must update even while UFW is inactive\n' >&2
+  exit 1
+fi
+if grep -Eq 'ufw --force delete allow from.*\|\| true' deploy/uninstall-ubuntu.sh; then
+  printf 'FAIL: uninstaller must not suppress managed UFW deletion failures\n' >&2
+  exit 1
+fi
+grep -Fq 'preserving firewall ownership state' deploy/uninstall-ubuntu.sh || {
+  printf 'FAIL: uninstaller must preserve ownership metadata on UFW cleanup failure\n' >&2
+  exit 1
+}
 grep -Eq '^USER[[:space:]]+[0-9]+' Dockerfile || {
   printf 'FAIL: runtime container must use a numeric non-root user\n' >&2
   exit 1

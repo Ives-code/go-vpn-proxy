@@ -199,7 +199,7 @@ install -o root -g "${APP_USER}" -m 0640 "${config_source}" "${CONFIG_DIR}/confi
 install -m 0600 -o root -g root "${environment_source}" "${CONFIG_DIR}/gateway.env"
 install -o root -g root -m 0644 "${service_source}" "${SERVICE_DEST}"
 
-if [[ -n "${validated_lan_cidr}" ]] && command -v ufw >/dev/null 2>&1 && LC_ALL=C ufw status | grep -q '^Status: active$'; then
+if [[ -n "${validated_lan_cidr}" ]] && command -v ufw >/dev/null 2>&1; then
   if [[ "${validated_lan_cidr}" != "${old_cidr}" ]]; then
     firewall_changed=1
     if [[ -n "${old_cidr}" ]]; then
