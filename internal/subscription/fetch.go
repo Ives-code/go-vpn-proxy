@@ -54,7 +54,7 @@ func (fetcher *HTTPFetcher) Fetch(ctx context.Context, source Source) ([]byte, s
 
 	response, err := fetcher.client.Do(request)
 	if err != nil {
-		return nil, "", fmt.Errorf("fetch source %s: %w", source.ID, err)
+		return nil, "", sourceFetchError{id: source.ID, cause: err}
 	}
 	defer response.Body.Close()
 
@@ -76,3 +76,11 @@ func (fetcher *HTTPFetcher) Fetch(ctx context.Context, source Source) ([]byte, s
 	hint := strings.TrimSpace(strings.Split(response.Header.Get("Content-Type"), ";")[0])
 	return body, hint, nil
 }
+
+type sourceFetchError struct {
+	id    string
+	cause error
+}
+
+func (err sourceFetchError) Error() string { return "source " + err.id + " fetch failed" }
+func (err sourceFetchError) Unwrap() error { return err.cause }

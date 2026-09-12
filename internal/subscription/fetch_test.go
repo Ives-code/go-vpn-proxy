@@ -2,11 +2,18 @@ package subscription
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+type failingTransport struct{}
+
+func (failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("network unavailable")
+}
 
 func TestHTTPFetcherRejectsNonHTTPSSource(t *testing.T) {
 	fetcher := NewHTTPFetcher(http.DefaultClient, 1024)
@@ -46,5 +53,19 @@ func TestHTTPFetcherReturnsFormatHint(t *testing.T) {
 	}
 	if string(body) != `{"outbounds":[]}` || hint != "application/json" {
 		t.Fatalf("body=%q hint=%q", body, hint)
+	}
+}
+
+func TestHTTPFetcherErrorDoesNotContainSubscriptionURL(t *testing.T) {
+	client := &http.Client{Transport: failingTransport{}}
+	fetcher := NewHTTPFetcher(client, 1024)
+	secretURL := "https://subscription.invalid/list?token=do-not-leak"
+
+	_, _, err := fetcher.Fetch(context.Background(), Source{ID: "7", URL: secretURL})
+	if err == nil {
+		t.Fatal("expected fetch error")
+	}
+	if strings.Contains(err.Error(), "subscription.invalid") || strings.Contains(err.Error(), "do-not-leak") {
+		t.Fatalf("fetch error leaked subscription URL: %q", err)
 	}
 }
