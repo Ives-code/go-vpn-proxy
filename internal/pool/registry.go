@@ -32,6 +32,14 @@ type Diff struct {
 	Kept    int
 }
 
+type Stats struct {
+	Total        int `json:"total"`
+	Healthy      int `json:"healthy"`
+	Unhealthy    int `json:"unhealthy"`
+	Quarantined  int `json:"quarantined"`
+	ActiveLeases int `json:"active_leases"`
+}
+
 type nodeState struct {
 	spec        subscription.NodeSpec
 	dialer      Dialer
@@ -223,6 +231,29 @@ func (registry *Registry) ProbeDue(now time.Time) []*NodeLease {
 		leases = append(leases, &NodeLease{ID: id, Dialer: state.dialer, registry: registry, halfOpen: true})
 	}
 	return leases
+}
+
+func (registry *Registry) Stats() Stats {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	var stats Stats
+	for _, id := range registry.order {
+		state := registry.nodes[id]
+		if state == nil || state.removed {
+			continue
+		}
+		stats.Total++
+		stats.ActiveLeases += state.active
+		switch {
+		case state.healthy:
+			stats.Healthy++
+		case state.lastFailure == "":
+			stats.Quarantined++
+		default:
+			stats.Unhealthy++
+		}
+	}
+	return stats
 }
 
 type NodeLease struct {

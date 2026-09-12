@@ -107,3 +107,18 @@ func TestAllDownHalfOpenIsBounded(t *testing.T) {
 		_ = second.Close()
 	}
 }
+
+func TestStatsReflectHealthAndActiveLeases(t *testing.T) {
+	registry, _ := healthyRegistry(t, "a", "b")
+	registry.MarkFailure("b", context.DeadlineExceeded)
+	lease, ok := registry.Acquire("a", false)
+	if !ok {
+		t.Fatal("acquire a")
+	}
+	defer lease.Close()
+
+	stats := registry.Stats()
+	if stats.Total != 2 || stats.Healthy != 1 || stats.Unhealthy != 1 || stats.ActiveLeases != 1 {
+		t.Fatalf("stats = %#v", stats)
+	}
+}
