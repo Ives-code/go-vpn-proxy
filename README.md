@@ -90,7 +90,22 @@ not publish the loopback-only admin port; inspect it from inside the container
 namespace or use the native systemd deployment when host-side status access is
 required.
 
-## Known behavior
+## 中文告警配置
+
+在私密环境文件设置 `PUSH_BASE_URL` 为推送服务的地址前缀（包含设备令牌，
+不包含标题和正文）。留空则关闭提醒。支持 HTTP/HTTPS；HTTP 地址会以明文
+传输推送令牌和消息，服务支持 HTTPS 时建议使用 HTTPS。
+
+- 订阅刷新失败：显示订阅编号和域名；网络故障也会触发，不等同于确认过期。
+- 可用节点少于 `low_node_threshold`（默认 30）：发送数量提醒。
+- 订阅到期前 7 天：根据响应头 `Subscription-Userinfo` 中的 Unix 秒时间戳
+  `expire` 提醒续费，已过期也会提醒；未提供有效时间则显示为未知，无法自动预告。
+- 同一故障或同一到期日期在本次进程运行内只提醒一次；恢复后再次异常重新提醒。
+  重启会重新评估并可能再次提醒。推送失败按后台检查周期重试。
+- 后台每 5 秒检查已完成刷新的状态，订阅本身默认每 30 分钟刷新。
+  状态接口的 `subscription_expires_at` 显示各编号的到期日期，零时间表示未知。
+
+## Other behavior
 
 - The first release enables VLESS, AnyTLS, Hysteria2, and Trojan subscription
   nodes plus HTTP upstream proxies;

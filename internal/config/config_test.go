@@ -51,6 +51,54 @@ func TestLoadAppliesSafeDefaults(t *testing.T) {
 	if len(cfg.SubscriptionURLs) != 2 {
 		t.Fatalf("SubscriptionURLs count = %d", len(cfg.SubscriptionURLs))
 	}
+	if cfg.LowNodeThreshold != 30 {
+		t.Fatalf("LowNodeThreshold = %d", cfg.LowNodeThreshold)
+	}
+	if cfg.PushBaseURL.Reveal() != "" {
+		t.Fatal("PushBaseURL must be empty by default")
+	}
+}
+
+func TestLoadAcceptsPushNotifications(t *testing.T) {
+	environment := validEnvironment()
+	environment["PUSH_BASE_URL"] = "http://push.invalid/private-token"
+	path := writeConfig(t, "low_node_threshold: 12\n")
+
+	cfg, err := Load(path, lookup(environment))
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.PushBaseURL.Reveal() != environment["PUSH_BASE_URL"] {
+		t.Fatal("PushBaseURL was not loaded")
+	}
+	if cfg.LowNodeThreshold != 12 {
+		t.Fatalf("LowNodeThreshold = %d", cfg.LowNodeThreshold)
+	}
+}
+
+func TestLoadRejectsInvalidPushConfiguration(t *testing.T) {
+	tests := []struct {
+		name       string
+		pushURL    string
+		configBody string
+		errorText  string
+	}{
+		{name: "scheme", pushURL: "ftp://push.invalid/token", configBody: "{}\n", errorText: "PUSH_BASE_URL"},
+		{name: "query", pushURL: "https://push.invalid/token?leak=yes", configBody: "{}\n", errorText: "PUSH_BASE_URL"},
+		{name: "threshold", configBody: "low_node_threshold: -1\n", errorText: "low_node_threshold"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			environment := validEnvironment()
+			if test.pushURL != "" {
+				environment["PUSH_BASE_URL"] = test.pushURL
+			}
+			_, err := Load(writeConfig(t, test.configBody), lookup(environment))
+			if err == nil || !strings.Contains(err.Error(), test.errorText) {
+				t.Fatalf("expected %q error, got %v", test.errorText, err)
+			}
+		})
+	}
 }
 
 func TestLoadRejectsMissingSecrets(t *testing.T) {

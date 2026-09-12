@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Fetcher interface {
@@ -19,14 +20,16 @@ type Manager struct {
 	fetcher   Fetcher
 	bySource  map[string][]NodeSpec
 	last      Snapshot
+	expiresAt map[string]time.Time
 }
 
 func NewManager(sources []Source, fetcher Fetcher) *Manager {
 	return &Manager{
-		sources:  append([]Source(nil), sources...),
-		fetcher:  fetcher,
-		bySource: make(map[string][]NodeSpec),
-		last:     Snapshot{SourceErrors: make(map[string]string)},
+		sources:   append([]Source(nil), sources...),
+		fetcher:   fetcher,
+		bySource:  make(map[string][]NodeSpec),
+		expiresAt: make(map[string]time.Time),
+		last:      Snapshot{SourceErrors: make(map[string]string)},
 	}
 }
 
@@ -36,8 +39,22 @@ func (manager *Manager) Refresh(ctx context.Context) (Snapshot, error) {
 
 	sourceErrors := make(map[string]string)
 	updates := make(map[string][]NodeSpec)
+	expiries := make(map[string]time.Time)
 	for _, source := range manager.sources {
-		body, hint, err := manager.fetcher.Fetch(ctx, source)
+		var body []byte
+		var hint string
+		var expiry time.Time
+		var err error
+		if f, ok := manager.fetcher.(interface {
+			FetchWithMetadata(context.Context, Source) ([]byte, string, time.Time, error)
+		}); ok {
+			body, hint, expiry, err = f.FetchWithMetadata(ctx, source)
+		} else {
+			body, hint, err = manager.fetcher.Fetch(ctx, source)
+		}
+		if err == nil {
+			expiries[source.ID] = expiry
+		}
 		if err != nil {
 			sourceErrors[source.ID] = err.Error()
 			continue
@@ -57,10 +74,14 @@ func (manager *Manager) Refresh(ctx context.Context) (Snapshot, error) {
 	}
 
 	manager.mu.Lock()
+	for id, expiry := range expiries {
+		manager.expiresAt[id] = expiry
+	}
 	for sourceID, nodes := range updates {
 		manager.bySource[sourceID] = nodes
 	}
 	manager.last = Snapshot{
+		ExpiresAt:    manager.expiresAt,
 		Nodes:        mergeSources(manager.bySource),
 		SourceErrors: sourceErrors,
 	}
@@ -119,11 +140,15 @@ func contains(values []string, wanted string) bool {
 
 func cloneSnapshot(input Snapshot) Snapshot {
 	output := Snapshot{
+		ExpiresAt:    make(map[string]time.Time, len(input.ExpiresAt)),
 		Nodes:        append([]NodeSpec(nil), input.Nodes...),
 		SourceErrors: make(map[string]string, len(input.SourceErrors)),
 	}
 	for key, value := range input.SourceErrors {
 		output.SourceErrors[key] = value
+	}
+	for key, value := range input.ExpiresAt {
+		output.ExpiresAt[key] = value
 	}
 	for index := range output.Nodes {
 		output.Nodes[index].Options = append([]byte(nil), input.Nodes[index].Options...)

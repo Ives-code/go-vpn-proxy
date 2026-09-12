@@ -2,7 +2,10 @@ package app
 
 import (
 	"context"
+	"dual-egress-gateway/internal/alert"
 	"errors"
+	"io"
+	"log/slog"
 	"net"
 	"sync/atomic"
 	"testing"
@@ -11,6 +14,41 @@ import (
 	"dual-egress-gateway/internal/pool"
 	"dual-egress-gateway/internal/subscription"
 )
+
+type alertSender struct{ sent chan string }
+
+func (s alertSender) Send(ctx context.Context, title, body string) error {
+	select {
+	case s.sent <- title:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return nil
+}
+func TestAlertLoopWaitsForInitialRefreshAndDeliversLowCount(t *testing.T) {
+	s := alertSender{sent: make(chan string, 4)}
+	a := &App{registry: pool.NewRegistry(appFactory{}, time.Second), subscriptions: subscription.NewManager(nil, nil), alerts: alert.NewMonitor(s, 30, nil), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go a.alertLoop(ctx, done)
+	defer func() { cancel(); <-done }()
+	select {
+	case <-s.sent:
+		t.Fatal("alert before initial refresh")
+	case <-time.After(5200 * time.Millisecond):
+	}
+	a.statusMu.Lock()
+	a.lastRefresh = time.Now()
+	a.statusMu.Unlock()
+	select {
+	case title := <-s.sent:
+		if title != "代理可用节点不足" {
+			t.Fatalf("title=%s", title)
+		}
+	case <-time.After(6 * time.Second):
+		t.Fatal("no alert after refresh")
+	}
+}
 
 type trackingListener struct {
 	closed atomic.Bool

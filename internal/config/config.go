@@ -29,7 +29,9 @@ type Config struct {
 	Username            Secret
 	Password            Secret
 	AdminToken          Secret
+	PushBaseURL         Secret
 	SubscriptionURLs    []string
+	LowNodeThreshold    int
 	RefreshInterval     time.Duration
 	ProbeInterval       time.Duration
 	DialTimeout         time.Duration
@@ -48,6 +50,7 @@ type fileConfig struct {
 	ShutdownDrain       string `yaml:"shutdown_drain"`
 	MaxSubscriptionSize string `yaml:"max_subscription_size"`
 	ProbeURL            string `yaml:"probe_url"`
+	LowNodeThreshold    int    `yaml:"low_node_threshold"`
 }
 
 func Load(path string, lookupEnv func(string) (string, bool)) (Config, error) {
@@ -71,6 +74,13 @@ func Load(path string, lookupEnv func(string) (string, bool)) (Config, error) {
 		ShutdownDrain:       30 * time.Second,
 		MaxSubscriptionSize: 4 << 20,
 		ProbeURL:            defaultString(file.ProbeURL, "https://cp.cloudflare.com/generate_204"),
+		LowNodeThreshold:    30,
+	}
+	if file.LowNodeThreshold != 0 {
+		if file.LowNodeThreshold < 1 {
+			return Config{}, errors.New("low_node_threshold must be a positive integer")
+		}
+		cfg.LowNodeThreshold = file.LowNodeThreshold
 	}
 
 	for name, target := range map[string]*time.Duration{
@@ -122,6 +132,13 @@ func Load(path string, lookupEnv func(string) (string, bool)) (Config, error) {
 	}
 	if cfg.AdminToken, ok = requiredSecret("ADMIN_TOKEN", lookupEnv); !ok {
 		return Config{}, errors.New("ADMIN_TOKEN is required")
+	}
+	if value, exists := lookupEnv("PUSH_BASE_URL"); exists && strings.TrimSpace(value) != "" {
+		value = strings.TrimSpace(value)
+		if err := validatePushBaseURL(value); err != nil {
+			return Config{}, err
+		}
+		cfg.PushBaseURL = Secret(value)
 	}
 
 	urlsValue, ok := lookupEnv("SUBSCRIPTION_URLS")
@@ -178,6 +195,17 @@ func validateProbeURL(value string) error {
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
 		return errors.New("probe_url must be an absolute HTTPS URL")
+	}
+	return nil
+}
+
+func validatePushBaseURL(value string) error {
+	parsed, err := url.Parse(value)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return errors.New("PUSH_BASE_URL must be an absolute HTTP or HTTPS URL")
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return errors.New("PUSH_BASE_URL must not contain user information, a query, or a fragment")
 	}
 	return nil
 }

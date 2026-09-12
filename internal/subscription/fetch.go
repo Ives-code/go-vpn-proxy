@@ -7,7 +7,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"time"
 )
 
 type HTTPFetcher struct {
@@ -45,6 +47,29 @@ func NewHTTPFetcher(client *http.Client, maxBytes int64) *HTTPFetcher {
 }
 
 func (fetcher *HTTPFetcher) Fetch(ctx context.Context, source Source) ([]byte, string, error) {
+	return fetcher.fetch(ctx, source, nil)
+}
+
+func (fetcher *HTTPFetcher) FetchWithMetadata(ctx context.Context, source Source) ([]byte, string, time.Time, error) {
+	var expiry time.Time
+	body, hint, err := fetcher.fetch(ctx, source, &expiry)
+	return body, hint, expiry, err
+}
+
+func ParseExpiry(header string) time.Time {
+	for _, field := range strings.Split(header, ";") {
+		key, value, ok := strings.Cut(strings.TrimSpace(field), "=")
+		if ok && strings.EqualFold(strings.TrimSpace(key), "expire") {
+			seconds, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+			if err == nil && seconds > 0 && seconds <= 253402300799 {
+				return time.Unix(seconds, 0).UTC()
+			}
+		}
+	}
+	return time.Time{}
+}
+
+func (fetcher *HTTPFetcher) fetch(ctx context.Context, source Source, expiry *time.Time) ([]byte, string, error) {
 	parsed, err := url.Parse(source.URL)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
 		return nil, "", fmt.Errorf("source %s must be an absolute HTTPS URL", source.ID)
@@ -82,6 +107,9 @@ func (fetcher *HTTPFetcher) Fetch(ctx context.Context, source Source) ([]byte, s
 	}
 
 	hint := strings.TrimSpace(strings.Split(response.Header.Get("Content-Type"), ";")[0])
+	if expiry != nil {
+		*expiry = ParseExpiry(response.Header.Get("Subscription-Userinfo"))
+	}
 	return body, hint, nil
 }
 

@@ -1,6 +1,9 @@
 package subscription
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 type Format string
 
@@ -25,6 +28,7 @@ type Source struct {
 }
 
 type Snapshot struct {
+	ExpiresAt    map[string]time.Time
 	Nodes        []NodeSpec
 	SourceErrors map[string]string
 }

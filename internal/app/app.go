@@ -12,8 +12,10 @@ import (
 	"time"
 
 	"dual-egress-gateway/internal/admin"
+	"dual-egress-gateway/internal/alert"
 	"dual-egress-gateway/internal/config"
 	"dual-egress-gateway/internal/httpproxy"
+	"dual-egress-gateway/internal/notify"
 	"dual-egress-gateway/internal/pool"
 	"dual-egress-gateway/internal/proxycore"
 	"dual-egress-gateway/internal/subscription"
@@ -37,6 +39,7 @@ type App struct {
 	statusMu      sync.RWMutex
 	lastRefresh   time.Time
 	closed        sync.Once
+	alerts        *alert.Monitor
 }
 
 func New(cfg config.Config, logger *slog.Logger) (*App, error) {
@@ -73,6 +76,14 @@ func New(cfg config.Config, logger *slog.Logger) (*App, error) {
 		prober:        prober,
 	}
 	application.httpProxy = httpproxy.New("http", proxyConfig, registry, pool.NewSelector(), logger)
+	if cfg.PushBaseURL.Reveal() != "" {
+		client, err := notify.NewClient(cfg.PushBaseURL.Reveal(), nil)
+		if err != nil {
+			_ = engine.Close()
+			return nil, err
+		}
+		application.alerts = alert.NewMonitor(client, cfg.LowNodeThreshold, alert.SourceLabels(cfg.SubscriptionURLs))
+	}
 	application.wsProxy = httpproxy.New("ws", proxyConfig, registry, pool.NewSelector(), logger)
 	adminHandler := admin.NewHandler(application, cfg.AdminToken.Reveal(), []string{
 		cfg.Username.Reveal(), cfg.Password.Reveal(), cfg.AdminToken.Reveal(),
@@ -82,6 +93,8 @@ func New(cfg config.Config, logger *slog.Logger) (*App, error) {
 }
 
 func (application *App) Run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	listeners, err := listenAll(
 		[]string{application.config.HTTPListen, application.config.WSListen, application.config.AdminListen},
 		net.Listen,
@@ -109,6 +122,8 @@ func (application *App) Run(ctx context.Context) error {
 
 	loopDone := make(chan struct{})
 	go application.backgroundLoop(ctx, loopDone)
+	alertDone := make(chan struct{})
+	go application.alertLoop(ctx, alertDone)
 
 	select {
 	case <-ctx.Done():
@@ -118,8 +133,10 @@ func (application *App) Run(ctx context.Context) error {
 			err = serveErr
 		}
 	}
+	cancel()
 	application.shutdown()
 	<-loopDone
+	<-alertDone
 	return err
 }
 
@@ -153,6 +170,7 @@ func (application *App) Status() admin.Status {
 		WSActive:     application.wsProxy.ActiveConnections(),
 		LastRefresh:  lastRefresh,
 		SourceErrors: snapshot.SourceErrors,
+		ExpiresAt:    snapshot.ExpiresAt,
 	}
 }
 
@@ -171,7 +189,41 @@ func (application *App) backgroundLoop(ctx context.Context, done chan<- struct{}
 				application.logger.Warn("subscription refresh was partial or failed", "error", err)
 			}
 		case <-probeTicker.C:
+			application.refreshMu.Lock()
 			probeDue(ctx, application.registry, application.prober, 16, application.config.DialTimeout, application.logger)
+			application.refreshMu.Unlock()
+		}
+	}
+}
+
+// Alerts sample settled state; network delivery never holds the refresh/probe lock.
+func (application *App) alertLoop(ctx context.Context, done chan<- struct{}) {
+	defer close(done)
+	if application.alerts == nil {
+		return
+	}
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			application.refreshMu.Lock()
+			application.statusMu.RLock()
+			ready := !application.lastRefresh.IsZero()
+			application.statusMu.RUnlock()
+			snapshot := application.subscriptions.Snapshot()
+			stats := application.registry.Stats()
+			application.refreshMu.Unlock()
+			if !ready || ctx.Err() != nil {
+				continue
+			}
+			failures := application.alerts.Evaluate(ctx, snapshot.SourceErrors, stats)
+			failures = append(failures, application.alerts.EvaluateExpiry(ctx, snapshot.ExpiresAt, time.Now())...)
+			if len(failures) > 0 {
+				application.logger.Warn("notification delivery failed; will retry", "count", len(failures))
+			}
 		}
 	}
 }

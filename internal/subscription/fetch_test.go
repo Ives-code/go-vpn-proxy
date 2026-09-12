@@ -8,7 +8,54 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestExpiryMetadata(t *testing.T) {
+	for _, value := range []string{"", "expire=0", "expire=bad", "expire=-1"} {
+		if !ParseExpiry(value).IsZero() {
+			t.Fatalf("invalid expiry accepted: %q", value)
+		}
+	}
+	want := time.Unix(1900000000, 0).UTC()
+	if got := ParseExpiry("upload=1; download=2; total=3; expire=1900000000"); !got.Equal(want) {
+		t.Fatalf("expiry=%v", got)
+	}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Subscription-Userinfo", "expire=1900000000")
+		w.Write([]byte(`{"outbounds":[]}`))
+	}))
+	defer server.Close()
+	f := NewHTTPFetcher(server.Client(), 1024)
+	_, _, expiry, err := f.FetchWithMetadata(context.Background(), Source{ID: "1", URL: server.URL})
+	if err != nil || !expiry.Equal(want) {
+		t.Fatalf("expiry=%v err=%v", expiry, err)
+	}
+}
+
+func TestManagerRetainsExpiryOnFetchFailureAndCopiesSnapshot(t *testing.T) {
+	fail := false
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if fail {
+			w.WriteHeader(503)
+			return
+		}
+		w.Header().Set("Subscription-Userinfo", "expire=1900000000")
+		w.Write([]byte(`{"outbounds":[]}`))
+	}))
+	defer server.Close()
+	m := NewManager([]Source{{ID: "1", URL: server.URL}}, NewHTTPFetcher(server.Client(), 1024))
+	s, _ := m.Refresh(context.Background())
+	if s.ExpiresAt["1"].Unix() != 1900000000 {
+		t.Fatal("expiry lost with invalid node body")
+	}
+	s.ExpiresAt["1"] = time.Time{}
+	fail = true
+	s, _ = m.Refresh(context.Background())
+	if s.ExpiresAt["1"].Unix() != 1900000000 {
+		t.Fatal("expiry lost or snapshot aliased")
+	}
+}
 
 type failingTransport struct{}
 
