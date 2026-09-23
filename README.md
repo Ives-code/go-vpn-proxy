@@ -13,6 +13,20 @@ shared as unhealthy by both listeners, and return after a successful probe.
 
 ## Configuration
 
+### Webshare HTTP upstream proxies
+
+For a private file containing one `IPv4:port:username:password` proxy per line,
+set `webshare_file: /etc/dual-egress-gateway/webshare-proxies.txt` in the YAML
+configuration. Store that file outside the repository with owner `root`, group
+`dual-egress`, and mode `0640`. This source is added after the HTTPS subscription
+sources and appears in `dual-egress-gateway subscriptions` as `Webshare 文件`.
+The existing shared health pool checks these nodes every 30 seconds and removes
+failed nodes from new-connection routing on both listeners; recovered nodes can
+return. The file is re-read at startup and on each 30-minute subscription refresh.
+Invalid updates keep the previous successful in-memory snapshot. Existing tunnels
+remain pinned to the node chosen when they connected.
+
+
 ## 固定单节点入口
 
 `cmd/fixed-egress` 提供独立的固定 HTTP/HTTPS/WSS 代理，配置文件必须恰好包含

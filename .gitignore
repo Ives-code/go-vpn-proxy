@@ -1,4 +1,6 @@
 .env
+webshare-proxies.txt
+Webshare 100 proxies.txt
 config.yaml
 state/
 bin/

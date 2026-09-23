@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"sort"
 	"strconv"
@@ -46,10 +47,47 @@ func Parse(body []byte, _ string) ([]NodeSpec, error) {
 	}
 
 	text := string(trimmed)
+	if nodes, recognized, err := parseWebshare(text); recognized {
+		return enforceNodeLimit(nodes, err)
+	}
 	if decoded, ok := decodeBase64(text); ok {
 		text = decoded
 	}
 	return enforceNodeLimit(parseURIs(text))
+}
+
+func parseWebshare(text string) ([]NodeSpec, bool, error) {
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	first := ""
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			first = strings.TrimSpace(line)
+			break
+		}
+	}
+	fields := strings.Split(first, ":")
+	if len(fields) != 4 || net.ParseIP(fields[0]).To4() == nil {
+		return nil, false, nil
+	}
+	nodes := make([]NodeSpec, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, ":")
+		if len(parts) != 4 || net.ParseIP(parts[0]).To4() == nil || parts[2] == "" || parts[3] == "" || strings.ContainsAny(parts[2]+parts[3], " \t\r\n") {
+			return nil, true, errors.New("invalid Webshare proxy record")
+		}
+		port, err := strconv.Atoi(parts[1])
+		if err != nil || port < 1 || port > 65535 {
+			return nil, true, errors.New("invalid Webshare proxy port")
+		}
+		outbound := map[string]any{"type": "http", "server": parts[0], "server_port": port, "username": parts[2], "password": parts[3]}
+		raw, _ := json.Marshal(outbound)
+		nodes = append(nodes, NodeSpec{ID: stableMapID(outbound), Type: "http", Format: FormatSingBox, Options: raw})
+	}
+	return nodes, true, nil
 }
 
 func enforceNodeLimit(nodes []NodeSpec, err error) ([]NodeSpec, error) {

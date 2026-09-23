@@ -8,3 +8,4 @@ shutdown_drain: 30s
 max_subscription_size: "4194304"
 probe_url: https://cp.cloudflare.com/generate_204
 low_node_threshold: 30
+# webshare_file: /etc/dual-egress-gateway/webshare-proxies.txt

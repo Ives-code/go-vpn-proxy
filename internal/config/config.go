@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +33,7 @@ type Config struct {
 	PushBaseURL               Secret
 	NotifyHostIP              string
 	SubscriptionSeedFile      string
+	WebshareFile              string
 	SubscriptionURLs          []string
 	HTTPSubscriptionAllowlist []string
 	LowNodeThreshold          int
@@ -55,6 +57,7 @@ type fileConfig struct {
 	ProbeURL             string `yaml:"probe_url"`
 	LowNodeThreshold     int    `yaml:"low_node_threshold"`
 	SubscriptionSeedFile string `yaml:"subscription_seed_file"`
+	WebshareFile         string `yaml:"webshare_file"`
 }
 
 func Load(path string, lookupEnv func(string) (string, bool)) (Config, error) {
@@ -70,6 +73,7 @@ func Load(path string, lookupEnv func(string) (string, bool)) (Config, error) {
 
 	cfg := Config{
 		SubscriptionSeedFile: strings.TrimSpace(file.SubscriptionSeedFile),
+		WebshareFile:         strings.TrimSpace(file.WebshareFile),
 		HTTPListen:           defaultString(file.HTTPListen, "127.0.0.1:18080"),
 		WSListen:             defaultString(file.WSListen, "127.0.0.1:18081"),
 		AdminListen:          defaultString(file.AdminListen, "127.0.0.1:19090"),
@@ -120,6 +124,9 @@ func Load(path string, lookupEnv func(string) (string, bool)) (Config, error) {
 
 	if cfg.HTTPListen == cfg.WSListen {
 		return Config{}, errors.New("http_listen and ws_listen must differ")
+	}
+	if cfg.WebshareFile != "" && !filepath.IsAbs(cfg.WebshareFile) {
+		return Config{}, errors.New("webshare_file must be an absolute path")
 	}
 	if err := validateLoopback(cfg.AdminListen); err != nil {
 		return Config{}, fmt.Errorf("admin_listen must use a loopback address: %w", err)

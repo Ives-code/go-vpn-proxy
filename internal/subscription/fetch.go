@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -76,6 +78,9 @@ func ParseExpiry(header string) time.Time {
 
 func (fetcher *HTTPFetcher) fetch(ctx context.Context, source Source, expiry *time.Time) ([]byte, string, error) {
 	parsed, err := url.Parse(source.URL)
+	if err == nil && parsed.Scheme == "file" {
+		return fetcher.fetchFile(ctx, parsed)
+	}
 	if err != nil || (parsed.Scheme != "https" && !(parsed.Scheme == "http" && fetcher.allowedHTTP[source.URL])) || parsed.Host == "" {
 		return nil, "", fmt.Errorf("source %s must be an absolute HTTPS URL", source.ID)
 	}
@@ -116,6 +121,29 @@ func (fetcher *HTTPFetcher) fetch(ctx context.Context, source Source, expiry *ti
 		*expiry = ParseExpiry(response.Header.Get("Subscription-Userinfo"))
 	}
 	return body, hint, nil
+}
+
+func (fetcher *HTTPFetcher) fetchFile(ctx context.Context, parsed *url.URL) ([]byte, string, error) {
+	if ctx.Err() != nil {
+		return nil, "", ctx.Err()
+	}
+	if parsed.Host != "" || parsed.RawQuery != "" || parsed.Fragment != "" || !filepath.IsAbs(parsed.Path) || fetcher.maxBytes <= 0 {
+		return nil, "", errors.New("invalid private proxy file source")
+	}
+	info, err := os.Lstat(parsed.Path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o007 != 0 {
+		return nil, "", errors.New("private proxy file is unavailable or exposed")
+	}
+	file, err := os.Open(parsed.Path)
+	if err != nil {
+		return nil, "", errors.New("private proxy file cannot be opened")
+	}
+	defer file.Close()
+	body, err := io.ReadAll(io.LimitReader(file, fetcher.maxBytes+1))
+	if err != nil || int64(len(body)) > fetcher.maxBytes {
+		return nil, "", errors.New("private proxy file exceeds size limit or cannot be read")
+	}
+	return body, "text/plain", nil
 }
 
 type sourceFetchError struct {

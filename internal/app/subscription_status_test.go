@@ -29,3 +29,15 @@ func TestSubscriptionStatusesSeparateCachedFailureFromUnloadedSource(t *testing.
 		}
 	}
 }
+
+func TestWebshareFileIsShownAsSeventhSourceWithoutPath(t *testing.T) {
+	a := &App{registry: pool.NewRegistry(appFactory{}, time.Second), config: config.Config{SubscriptionURLs: []string{"https://example.invalid/list"}, WebshareFile: "/etc/dual-egress-gateway/webshare-proxies.txt"}}
+	urls := a.sourceURLs()
+	if len(urls) != 2 || urls[1] != "file:///etc/dual-egress-gateway/webshare-proxies.txt" {
+		t.Fatalf("source URLs count=%d", len(urls))
+	}
+	rows := a.subscriptionStatuses(subscription.Snapshot{})
+	if len(rows) != 2 || rows[1].Address != "Webshare 文件" {
+		t.Fatalf("status=%v", rows)
+	}
+}

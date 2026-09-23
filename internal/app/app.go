@@ -52,8 +52,9 @@ func New(cfg config.Config, logger *slog.Logger) (*App, error) {
 		return nil, err
 	}
 	registry := pool.NewRegistry(engine, cfg.ProbeInterval)
-	sources := make([]subscription.Source, 0, len(cfg.SubscriptionURLs))
-	for index, sourceURL := range cfg.SubscriptionURLs {
+	configuredURLs := sourceURLs(cfg)
+	sources := make([]subscription.Source, 0, len(configuredURLs))
+	for index, sourceURL := range configuredURLs {
 		sources = append(sources, subscription.Source{ID: fmt.Sprintf("%d", index+1), URL: sourceURL})
 	}
 	fetcher := subscription.NewHTTPFetcher(&http.Client{Timeout: 30 * time.Second}, cfg.MaxSubscriptionSize, cfg.HTTPSubscriptionAllowlist...)
@@ -89,7 +90,7 @@ func New(cfg config.Config, logger *slog.Logger) (*App, error) {
 			_ = engine.Close()
 			return nil, err
 		}
-		application.alerts = alert.NewMonitor(client, cfg.LowNodeThreshold, alert.SourceLabels(cfg.SubscriptionURLs))
+		application.alerts = alert.NewMonitor(client, cfg.LowNodeThreshold, alert.SourceLabels(configuredURLs))
 	}
 	application.wsProxy = httpproxy.New("ws", proxyConfig, registry, pool.NewSelector(), logger)
 	adminHandler := admin.NewHandler(application, cfg.AdminToken.Reveal(), []string{
@@ -190,11 +191,14 @@ func (application *App) subscriptionStatuses(snapshot subscription.Snapshot) []a
 			counts[id]++
 		}
 	}
-	result := make([]admin.SubscriptionStatus, 0, len(application.config.SubscriptionURLs))
-	for i, raw := range application.config.SubscriptionURLs {
+	urls := application.sourceURLs()
+	result := make([]admin.SubscriptionStatus, 0, len(urls))
+	for i, raw := range urls {
 		id := fmt.Sprint(i + 1)
 		address := "[隐藏]"
-		if u, err := url.Parse(raw); err == nil {
+		if u, err := url.Parse(raw); err == nil && u.Scheme == "file" {
+			address = "Webshare 文件"
+		} else if err == nil {
 			address = u.Scheme + "://" + u.Host + "/[已隐藏路径和密钥]"
 		}
 		state := "pending"
@@ -207,6 +211,16 @@ func (application *App) subscriptionStatuses(snapshot subscription.Snapshot) []a
 	}
 	return result
 }
+
+func sourceURLs(cfg config.Config) []string {
+	urls := append([]string(nil), cfg.SubscriptionURLs...)
+	if cfg.WebshareFile != "" {
+		urls = append(urls, (&url.URL{Scheme: "file", Path: cfg.WebshareFile}).String())
+	}
+	return urls
+}
+
+func (application *App) sourceURLs() []string { return sourceURLs(application.config) }
 
 func (application *App) backgroundLoop(ctx context.Context, done chan<- struct{}) {
 	defer close(done)

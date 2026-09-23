@@ -49,7 +49,9 @@ func SourceLabels(subscriptionURLs []string) map[string]string {
 	for index, rawURL := range subscriptionURLs {
 		id := strconv.Itoa(index + 1)
 		parsed, err := url.Parse(rawURL)
-		if err == nil && parsed.Hostname() != "" {
+		if err == nil && parsed.Scheme == "file" {
+			labels[id] = "Webshare 文件"
+		} else if err == nil && parsed.Hostname() != "" {
 			labels[id] = parsed.Hostname()
 		} else {
 			labels[id] = "未知域名"
